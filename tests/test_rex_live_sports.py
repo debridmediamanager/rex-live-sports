@@ -27,6 +27,8 @@ with open(os.path.join(HERE, "fixtures", "catalog.json")) as _handle:
     CATALOG = json.load(_handle)
 with open(os.path.join(HERE, "fixtures", "probe-dm-sky-sports-racing.json")) as _handle:
     PROBE = json.load(_handle)
+with open(os.path.join(HERE, "fixtures", "probe-slate-cv-2897253.json")) as _handle:
+    SLATE = json.load(_handle)
 with open(os.path.join(HERE, "fixtures", "iptv-org.json")) as _handle:
     IPTV_ORG = json.load(_handle)
 PNG = b"\x89PNG\r\n\x1a\n"
@@ -169,6 +171,9 @@ class Channels(unittest.TestCase):
     def test_playable(self):
         self.assertFalse(rex_live_sports.playable({"format": {"format_name": "hls"}, "streams": [{"codec_type": "audio"}]}))
         self.assertFalse(rex_live_sports.playable({"format": {"format_name": "mpegts"}, "streams": PROBE["streams"]}))
+        # live-sports' placeholder while a channel warms up: a 0x0 png and no sound. rex
+        # refused every conversion of the six channels pushed with it (fun, 2026-10-27).
+        self.assertFalse(rex_live_sports.playable(SLATE))
 
 
 class SyncOnce(unittest.TestCase):
@@ -261,6 +266,29 @@ class SyncOnce(unittest.TestCase):
         self.calls.clear()
         self.sync.once()
         self.assertEqual(sum(len(part["items"]) for part in self.snapshots()), 624)
+
+    def test_a_placeholder_is_probed_again(self):
+        os.environ["FAKE_FFPROBE_SLATE"] = "dm-nfl-network"
+        self.addCleanup(os.environ.pop, "FAKE_FFPROBE_SLATE", None)
+        self.sync.once()
+        path = os.path.join(self.config["cache"], "dm-nfl-network.json")
+        self.assertFalse(os.path.exists(path))  # not pushed, not kept
+        self.assertEqual(sum(len(part["items"]) for part in self.snapshots()), 623)
+        os.environ.pop("FAKE_FFPROBE_SLATE")
+        self.calls.clear()
+        self.sync.once()
+        self.assertEqual(sum(len(part["items"]) for part in self.snapshots()), 624)
+
+    def test_a_kept_placeholder_is_probed_again(self):
+        # Probes kept before placeholders were refused stay a day otherwise.
+        self.sync.once()
+        path = os.path.join(self.config["cache"], "dm-nfl-network.json")
+        with open(path, "w") as handle:
+            json.dump(SLATE, handle)
+        self.calls.clear()
+        self.sync.once()
+        with open(path) as handle:
+            self.assertEqual(json.load(handle)["streams"][0]["codec_name"], "h264")
 
     def test_a_list_under_half_of_what_rex_holds_is_not_forced(self):
         self.sync.once()

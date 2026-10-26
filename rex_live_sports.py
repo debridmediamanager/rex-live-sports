@@ -178,9 +178,12 @@ def item(config, key, meta, probe, art=None):
 
 
 def playable(probe):
-    """An HLS probe with a picture: what rex plays as a live channel."""
+    """An HLS probe with a moving picture: what rex plays as a live channel. live-sports shows a
+    placeholder while a channel warms up, a 0x0 png with no sound, which rex cannot convert."""
     return (isinstance(probe, dict) and (probe.get("format") or {}).get("format_name") == "hls"
-            and any(stream.get("codec_type") == "video" for stream in probe.get("streams") or []))
+            and any(stream.get("codec_type") == "video" and (stream.get("width") or 0) > 0
+                    and stream.get("codec_name") not in ("png", "mjpeg", "bmp", "gif")
+                    for stream in probe.get("streams") or []))
 
 
 class Sync:
@@ -225,7 +228,9 @@ class Sync:
         try:
             if time.time() - os.path.getmtime(path) < self.config["probe_hours"] * 3600:
                 with open(path) as handle:
-                    return json.load(handle)
+                    kept = json.load(handle)
+                if playable(kept):
+                    return kept
         except (OSError, ValueError):
             pass
         try:
