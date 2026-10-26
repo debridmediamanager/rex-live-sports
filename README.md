@@ -97,6 +97,8 @@ Edit `config.json` and restart:
 - Logos are matched by the channel's name, with its country when live-sports names one. A
   channel whose name iptv-org gives to another country's channel of the same brand gets that
   logo (Fox Sports 2 Argentina gets Fox Sports 2's).
+- A few logos are SVG files. An ffmpeg built without SVG support (gyan.dev's Windows builds)
+  cannot draw them, and those channels get their name instead.
 - Channels with several qualities play the one FFmpeg picks first, which can be the lowest.
 - When live-sports lists fewer than half the channels rex holds (it does for a few minutes after
   it starts), rex keeps them all for up to half an hour, while live-sports checks them again.

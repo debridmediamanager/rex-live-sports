@@ -18,7 +18,7 @@ One process does two things:
 
 The pictures are made here, with ffmpeg: rex fetches artwork only from public hosts or from the
 source itself, and live-sports' own poster is an SVG on your network. A channel iptv-org has a
-logo for gets that logo; any other its name, as live-sports draws it.
+logo for gets that logo; any other its name.
 
 Standard library only; ffprobe and ffmpeg are separate executables.
 """
@@ -30,6 +30,7 @@ import os
 import re
 import subprocess
 import sys
+import textwrap
 import threading
 import time
 import urllib.error
@@ -64,7 +65,7 @@ AGENT = "rex-live-sports (https://github.com/debridmediamanager/rex-live-sports)
 
 IPTV_ORG = "https://iptv-org.github.io/api"
 
-# live-sports' own poster colour, behind its name card and behind a logo drawn in light colours.
+# live-sports' own poster colour, behind a channel's name and behind a logo drawn in light colours.
 DARK, LIGHT = "0x1a1a2e", "0xf2f2f2"
 
 # (width, height, logo box): a film's 2:3 poster and a 16:9 background.
@@ -274,9 +275,8 @@ class Sync:
             raise RuntimeError(out.stderr.strip()[-300:] or "ffmpeg read no picture")
         return float(found[1])
 
-    def draw(self, source, background, box, shape, path):
-        width, height, logo = SHAPES[shape]
-        box = logo if box else min(width, height)
+    def draw(self, source, background, shape, path):
+        width, height, box = SHAPES[shape]
         out = subprocess.run([self.config["ffmpeg"], "-v", "error", "-y", "-i", source, "-filter_complex",
                               "color=%s:s=%dx%d[bg];[0]scale=%d:%d:force_original_aspect_ratio=decrease,format=rgba[fg];"
                               "[bg][fg]overlay=(W-w)/2:(H-h)/2,format=rgb24" % (background, width, height, box, box),
@@ -285,46 +285,72 @@ class Sync:
             raise RuntimeError(out.stderr.strip()[-300:] or "ffmpeg failed")
         os.replace(path + ".tmp.png", path)
 
+    def title(self, name, shape, path):
+        """The channel's name in white on live-sports' dark colour, for a channel with no logo,
+        wrapped to lines drawn one by one (ffmpeg 4.4's drawtext cannot centre lines). Drawn, not
+        read from live-sports' SVG card: not every ffmpeg reads SVG (gyan.dev's Windows builds do
+        not), and fontconfig there has no setup, so Windows names its font."""
+        width, height, _ = SHAPES[shape]
+        lines = textwrap.wrap(name, 16 if width < height else 24, break_long_words=True)[:4] or [name]
+        size = max(16, min(72, int(width * 0.8 / max(len(line) for line in lines) * 1.8)))
+        font = "fontfile='C\\:/Windows/Fonts/arialbd.ttf'" if os.name == "nt" else "font=Sans"
+        files = ["%s.%d.txt" % (path, at) for at in range(len(lines))]
+        for line, file in zip(lines, files):
+            with open(file, "w", encoding="utf-8") as handle:
+                handle.write(line)
+        top = (height - len(lines) * size * 1.3) / 2
+        graph = ",".join("drawtext=textfile='%s':expansion=none:%s:fontcolor=white:fontsize=%d:x=(w-tw)/2:y=%d"
+                         % (os.path.basename(file), font, size, top + at * size * 1.3) for at, file in enumerate(files))
+        try:
+            out = subprocess.run([self.config["ffmpeg"], "-v", "error", "-y", "-f", "lavfi", "-i", "color=%s:s=%dx%d" % (DARK, width, height),
+                                  "-vf", graph, "-frames:v", "1", os.path.basename(path) + ".tmp.png"],
+                                 capture_output=True, text=True, timeout=60, cwd=os.path.dirname(path))
+        finally:
+            for file in files:
+                os.remove(file)
+        if out.returncode != 0 or not os.path.exists(path + ".tmp.png"):
+            raise RuntimeError(out.stderr.strip()[-300:] or "ffmpeg failed")
+        os.replace(path + ".tmp.png", path)
+
     def artwork(self, key, meta):
         """The channel's poster and background, as rex reads them from the relay: its logo when
-        iptv-org has one, else live-sports' name card. A picture is drawn once; its name carries
-        what it was drawn from, so a new logo is a new path, which clients do not hold cached."""
+        iptv-org has one, else its name. A picture is drawn once; its name carries what it was
+        drawn from, so a new logo is a new path, which clients do not hold cached."""
         name = str(meta.get("name") or key)
-        card = "%s/poster/%s.svg" % (self.config["live_sports_url"], urllib.parse.quote(name, safe=""))
         folder = os.path.join(self.config["cache"], "art")
         os.makedirs(folder, exist_ok=True)
-        for url in [logo_for(self.logo_index(), name), card]:
-            if not url:
-                continue
-            stem = "%s-%s" % (key, hashlib.sha1(url.encode()).hexdigest()[:8])
+        for url in [url for url in [logo_for(self.logo_index(), name)] if url] + [None]:
+            stem = "%s-%s" % (key, hashlib.sha1((url or "name:" + name).encode()).hexdigest()[:8])
             out = {shape: os.path.join(folder, "%s-%s.png" % (stem, shape)) for shape in SHAPES}
             try:
                 if not all(os.path.exists(path) for path in out.values()):
-                    data = fetch(url)
-                    if url == card:
-                        # Square corners: the card is drawn on its own colour, where round ones leave marks.
-                        data = data.replace(b' rx="16"', b"")
-                    # ffmpeg tells an SVG only by its name; other pictures by their bytes.
-                    source = os.path.join(folder, stem + (".svg" if data.lstrip()[:5] in (b"<?xml", b"<svg ") else ".source"))
-                    with open(source, "wb") as handle:
-                        handle.write(data)
-                    try:
-                        background = DARK
-                        if url != card:
-                            # How much the logo changes the two backgrounds says how much of it is
-                            # drawn and how bright that is; a mostly light logo goes on the dark one.
-                            on_black, on_white = self.luma(source, "black"), self.luma(source, "white")
-                            drawn = 1 - (on_white - on_black) / 255
-                            background = DARK if drawn > 0.05 and on_black / drawn > 150 else LIGHT
+                    if url is None:
                         for shape, path in out.items():
-                            self.draw(source, background, url != card, shape, path)
-                    finally:
-                        os.remove(source)
+                            self.title(name, shape, path)
+                    else:
+                        self.logo(url, stem, folder, out)
                 return {shape: "%s/%s/art/%s" % (self.config["relay_url"], self.config["directory"], os.path.basename(path))
                         for shape, path in out.items()}
             except Exception as error:
-                LOG.info("%s: picture from %s: %s", key, url.split("?")[0][:80], error)
+                LOG.info("%s: picture from %s: %s", key, (url or "its name").split("?")[0][:80], error)
         return {}
+
+    def logo(self, url, stem, folder, out):
+        data = fetch(url)
+        # ffmpeg tells an SVG only by its name; other pictures by their bytes.
+        source = os.path.join(folder, stem + (".svg" if data.lstrip()[:5] in (b"<?xml", b"<svg ") else ".source"))
+        with open(source, "wb") as handle:
+            handle.write(data)
+        try:
+            # How much the logo changes the two backgrounds says how much of it is drawn and how
+            # bright that is; a mostly light logo goes on the dark one.
+            on_black, on_white = self.luma(source, "black"), self.luma(source, "white")
+            drawn = 1 - (on_white - on_black) / 255
+            background = DARK if drawn > 0.05 and on_black / drawn > 150 else LIGHT
+            for shape, path in out.items():
+                self.draw(source, background, shape, path)
+        finally:
+            os.remove(source)
 
     def once(self):
         listed = channels(self.config, get_json(self.config["live_sports_url"] + "/catalog/tv/all.json"))

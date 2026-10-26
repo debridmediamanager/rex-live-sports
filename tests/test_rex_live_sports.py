@@ -86,15 +86,15 @@ def config(work, base, **extra):
 
 
 def offline(test, base, refused=()):
-    """iptv-org's lists from the fixture, served at `base`, and pictures fetched from nowhere:
-    live-sports' name card is an SVG, a logo a PNG, a url in `refused` a 404."""
+    """iptv-org's lists from the fixture, served at `base`, and logos fetched from nowhere: a PNG
+    naming its url, or a 404 for a url in `refused`."""
     rex_live_sports.IPTV_ORG, iptv_org = base + "/iptv-org", rex_live_sports.IPTV_ORG
     test.addCleanup(setattr, rex_live_sports, "IPTV_ORG", iptv_org)
 
     def fetch(url):
         if url in refused:
             raise urllib.error.HTTPError(url, 404, "Not Found", {}, None)
-        return b'<svg xmlns="http://www.w3.org/2000/svg"/>' if "/poster/" in url else PNG + url.encode()
+        return PNG + url.encode()
     patcher = unittest.mock.patch.object(rex_live_sports, "fetch", fetch)
     patcher.start()
     test.addCleanup(patcher.stop)
@@ -216,10 +216,10 @@ class SyncOnce(unittest.TestCase):
         with open(os.path.join(art, pushed["ls-sky-sports-racing"]["display"]["thumb"].rsplit("/", 1)[1]), "rb") as handle:
             self.assertIn(b"skychb1354.png", handle.read())  # drawn from its logo
         with open(os.path.join(art, pushed["ls-geylang-vs-hougang"]["display"]["thumb"].rsplit("/", 1)[1]), "rb") as handle:
-            self.assertTrue(handle.read().startswith(b"<svg"))  # drawn from live-sports' name card
-        # Fox Sports 501's logo does not open: live-sports' name card instead.
-        self.assertIn(rex_live_sports.hashlib.sha1(("%s/poster/Fox%%20Sports%%20501%%20%%28Australia%%29.svg" % self.config["live_sports_url"]).encode()).hexdigest()[:8],
-                      pushed["ls-fox-sports-501-australia"]["display"]["thumb"])
+            self.assertEqual(handle.read(), b"TITLE:Geylang vs Hougang")  # no logo: its name
+        # Fox Sports 501's logo does not open: its name instead.
+        with open(os.path.join(art, pushed["ls-fox-sports-501-australia"]["display"]["thumb"].rsplit("/", 1)[1]), "rb") as handle:
+            self.assertEqual(handle.read(), b"TITLE:Fox Sports 501 (Australia)")
 
     def test_a_dark_logo_goes_on_a_light_background(self):
         commands = []
@@ -227,10 +227,27 @@ class SyncOnce(unittest.TestCase):
         with unittest.mock.patch.object(rex_live_sports.subprocess, "run", lambda command, **kw: commands.append(command) or run(command, **kw)):
             self.sync.artwork("sky-sports-racing", {"name": "Sky Sports Racing"})
             self.sync.artwork("geylang-vs-hougang", {"name": "Geylang vs Hougang"})
-        drawn = [command[command.index("-filter_complex") + 1] for command in commands if "signalstats" not in " ".join(command)]
-        self.assertEqual(len(drawn), 4)
-        self.assertTrue(all(graph.startswith("color=0xf2f2f2") for graph in drawn[:2]), drawn)  # fake ffmpeg: a dark logo
-        self.assertTrue(all(graph.startswith("color=0x1a1a2e") for graph in drawn[2:]), drawn)
+        logos = [command[command.index("-filter_complex") + 1] for command in commands
+                 if "-filter_complex" in command and "signalstats" not in " ".join(command)]
+        names = [command[command.index("-i") + 1] for command in commands if "lavfi" in command]
+        self.assertEqual(len(logos), 2)
+        self.assertTrue(all(graph.startswith("color=0xf2f2f2") for graph in logos), logos)  # fake ffmpeg: a dark logo
+        self.assertEqual(names, ["color=0x1a1a2e:s=600x900", "color=0x1a1a2e:s=1280x720"])
+
+    def test_a_name_is_drawn_as_it_is_written(self):
+        commands = []
+        run = subprocess.run
+        with unittest.mock.patch.object(rex_live_sports.subprocess, "run", lambda command, **kw: commands.append(command) or run(command, **kw)):
+            pictures = self.sync.artwork("x", {"name": "Tennis ATP Basel: Fritz – Shelton 100% 'live'"})
+        poster = commands[0][commands[0].index("-vf") + 1]
+        # Wrapped to lines; `%` is no expansion (gyan.dev's ffmpeg 9 refuses the frame, Debian's
+        # 7.1 draws nothing); the name goes in through files, so nothing in it needs escaping.
+        self.assertEqual(poster.count("drawtext="), 4)
+        self.assertEqual(poster.count("expansion=none"), 4)
+        self.assertNotIn("Fritz", poster)
+        with open(os.path.join(self.config["cache"], "art", pictures["poster"].rsplit("/", 1)[1]), "rb") as handle:
+            self.assertEqual(handle.read(), "TITLE:Tennis ATP Basel: Fritz – Shelton 100% 'live'".encode())
+        self.assertEqual(sorted(os.listdir(os.path.join(self.config["cache"], "art"))), sorted(url.rsplit("/", 1)[1] for url in pictures.values()))
 
     def test_pictures_are_drawn_once(self):
         first = self.sync.artwork("sky-sports-racing", {"name": "Sky Sports Racing"})
