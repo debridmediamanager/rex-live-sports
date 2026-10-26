@@ -1,0 +1,14 @@
+# systemd --user unit: copy to ~/.config/systemd/user/, then
+#   systemctl --user daemon-reload && systemctl --user enable --now rex-live-sports
+[Unit]
+Description=rex-live-sports: live-sports channels as a rex source
+After=network-online.target
+
+[Service]
+WorkingDirectory=%h/rex-live-sports
+ExecStart=/usr/bin/python3 %h/rex-live-sports/rex_live_sports.py --config %h/rex-live-sports/config.json
+Restart=always
+RestartSec=30
+
+[Install]
+WantedBy=default.target
