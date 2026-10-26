@@ -1,5 +1,5 @@
 FROM python:3.12-slim
-# ffprobe checks each channel's stream once a day.
+# ffprobe checks each channel's stream once a day; ffmpeg draws its poster.
 RUN apt-get update && apt-get install -y --no-install-recommends ffmpeg ca-certificates && rm -rf /var/lib/apt/lists/*
 WORKDIR /data
 # A new config listens where the published port reaches it.
