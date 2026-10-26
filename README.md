@@ -15,6 +15,12 @@ is recorded: when someone presses play, rex reads the channel from live-sports a
 - **Live, not a recording.** rex plays each channel as a live broadcast, with no end and no
   resume point, and never marks it watched.
 
+![The Live Sports library in Plex Web: each channel's logo, or its name where it has none](docs/plex-library.webp)
+
+| Each group is a collection | A channel | Playing live |
+|---|---|---|
+| ![Collections: Live: Football, Live: Cricket, Live: Racing and others](docs/plex-collections.webp) | ![Sky Sports Racing: 1080p H.264, AAC stereo](docs/plex-details.webp) | ![Sky Sports Racing playing live in Plex Web](docs/plex-playing.webp) |
+
 It is one Python file (standard library only) that runs beside rex and talks to it through rex's
 feed API, as every rex source does.
 
