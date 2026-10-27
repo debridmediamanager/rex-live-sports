@@ -209,7 +209,25 @@ class Sync:
             LOG.warning("rex ignored %s: %s", ignored.get("entry"), ignored.get("reason"))
 
     def ffprobe(self, url):
-        command = [self.config["ffprobe"], "-v", "error", "-print_format", "json", "-show_format", "-show_streams"]
+        probe = self.run_ffprobe(["-show_format", "-show_streams"], url)
+        video = next((stream for stream in probe.get("streams") or [] if stream.get("codec_type") == "video"), None)
+        if video is not None and video.get("field_order") in (None, "unknown"):
+            # A live stream joined mid-GOP is described before a frame is decoded, so ffprobe
+            # leaves field_order unknown; rex reads interlacing from it, and browsers cannot play
+            # field-coded H.264 that rex passes through (Chrome, fun, 2026-10-27).
+            frames = self.run_ffprobe(["-select_streams", "v:0", "-read_intervals", "%+4",
+                                       "-show_entries", "frame=interlaced_frame,top_field_first"], url).get("frames") or []
+            if frames:
+                interlaced = [frame for frame in frames if frame.get("interlaced_frame")]
+                if len(interlaced) * 2 <= len(frames):
+                    video["field_order"] = "progressive"
+                else:
+                    top = sum(1 for frame in interlaced if frame.get("top_field_first"))
+                    video["field_order"] = "tt" if top * 2 >= len(interlaced) else "bb"
+        return probe
+
+    def run_ffprobe(self, args, url):
+        command = [self.config["ffprobe"], "-v", "error", "-print_format", "json"] + args
         if self.picky is None:
             # FFmpeg 7.1+ refuses HLS segments named without a media extension unless told not to.
             help_text = subprocess.run([self.config["ffprobe"], "-h", "demuxer=hls"], capture_output=True, text=True).stdout
@@ -229,7 +247,9 @@ class Sync:
             if time.time() - os.path.getmtime(path) < self.config["probe_hours"] * 3600:
                 with open(path) as handle:
                     kept = json.load(handle)
-                if playable(kept):
+                # Probes kept before field_order was read are probed again once.
+                if playable(kept) and all(stream.get("field_order") not in (None, "unknown") for stream in kept["streams"]
+                                          if stream.get("codec_type") == "video"):
                     return kept
         except (OSError, ValueError):
             pass

@@ -290,6 +290,30 @@ class SyncOnce(unittest.TestCase):
         with open(path) as handle:
             self.assertEqual(json.load(handle)["streams"][0]["codec_name"], "h264")
 
+    def test_interlacing_is_read_from_frames(self):
+        # A live channel joined mid-GOP probes with field_order unknown; rex needs it to know the
+        # picture is interlaced, which Chrome cannot play as rex copies it (fun, 2026-10-27).
+        os.environ["FAKE_FFPROBE_INTERLACED"] = "dm-nfl-network"
+        self.addCleanup(os.environ.pop, "FAKE_FFPROBE_INTERLACED", None)
+        self.sync.once()
+        orders = {}
+        for name in ("dm-nfl-network", "dm-sky-sports-racing"):
+            with open(os.path.join(self.config["cache"], name + ".json")) as handle:
+                orders[name] = [stream.get("field_order") for stream in json.load(handle)["streams"] if stream["codec_type"] == "video"]
+        self.assertEqual(orders, {"dm-nfl-network": ["tt"], "dm-sky-sports-racing": ["progressive"]})
+
+    def test_a_kept_probe_without_field_order_is_probed_again(self):
+        self.sync.once()
+        path = os.path.join(self.config["cache"], "dm-nfl-network.json")
+        with open(path, "w") as handle:
+            json.dump(PROBE, handle)  # as kept before field_order was read
+        os.environ["FAKE_FFPROBE_INTERLACED"] = "dm-nfl-network"
+        self.addCleanup(os.environ.pop, "FAKE_FFPROBE_INTERLACED", None)
+        self.calls.clear()
+        self.sync.once()
+        with open(path) as handle:
+            self.assertEqual(json.load(handle)["streams"][0]["field_order"], "tt")
+
     def test_a_list_under_half_of_what_rex_holds_is_not_forced(self):
         self.sync.once()
         self.calls.clear()
