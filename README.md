@@ -28,7 +28,7 @@ feed API, as every rex source does.
 
 | You need | Why |
 |---|---|
-| rex, nightly 2026.10.26 or newer | Older builds do not take collections, and before 2026.10.25 stop a live channel after a few seconds. Setup: [rex](https://notes.debridmediamanager.com/guides/rex/) |
+| rex, nightly 2026.10.26 or newer | Older builds do not take collections, and before 2026.10.25 stop a live channel after a few seconds. Setup: [rex with your own app](https://notes.debridmediamanager.com/rex/any-source/) |
 | A live-sports server, on this machine or your home network | It finds the channels and serves them. See its README; Docker: `docker run -d -p 8765:8765 ghcr.io/yowmamasita/live-sports:latest` |
 | Python 3.9 or newer, and FFmpeg (`ffmpeg` and `ffprobe`) | rex-live-sports checks each channel's stream once a day with ffprobe, because rex needs to know what is in it before it can play, and draws the posters with ffmpeg |
 | FFmpeg where rex runs | rex plays HLS channels by converting them (a copy, cheap) |
