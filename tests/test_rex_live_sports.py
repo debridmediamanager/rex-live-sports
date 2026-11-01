@@ -622,7 +622,9 @@ class AgainstRex(unittest.TestCase):
         sections = self.get("/library/sections")["MediaContainer"]["Directory"]
         section = next(section for section in sections if section["title"] == "Live Sports")
         rows = self.get("/library/sections/%s/all" % section["key"])["MediaContainer"].get("Metadata") or []
-        self.assertEqual(len(rows), len(rex_live_sports.channels(sync.config, {"metas": [m for m in CATALOG["metas"] if m["genre"].startswith("Live:")]})))
+        # One row a channel name (bd00b1d): the Live: groups list Willow twice.
+        names = {meta["name"].strip().lower() for _, _, meta in rex_live_sports.channels(sync.config, catalog)}
+        self.assertEqual(len(rows), len(names))
         racing = next(row for row in rows if row["title"] == "Sky Sports Racing")
         # rex fetched the poster from the relay and serves it as the row's thumb.
         request = urllib.request.Request("http://127.0.0.1:%d%s" % (self.port, racing["thumb"]), headers={"X-Plex-Token": self.TOKEN})
@@ -645,7 +647,7 @@ class AgainstRex(unittest.TestCase):
         catalog["metas"][:] = catalog["metas"][:2]
         rex_live_sports.Sync(sync.config).once()
         rows = self.get("/library/sections/%s/all" % section["key"])["MediaContainer"].get("Metadata") or []
-        self.assertEqual(len([row for row in rows if not row.get("deletedAt")]), len(rex_live_sports.channels(sync.config, {"metas": [m for m in CATALOG["metas"] if m["genre"].startswith("Live:")]})))
+        self.assertEqual(len([row for row in rows if not row.get("deletedAt")]), len(names))
 
 
 if __name__ == "__main__":
