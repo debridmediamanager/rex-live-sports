@@ -14,6 +14,9 @@ is recorded: when someone presses play, rex reads the channel from live-sports a
   channels have one), or with its name where there is no logo, such as a single match.
 - **Live, not a recording.** rex plays each channel as a live broadcast, with no end and no
   resume point, and never marks it watched.
+- **A TV guide.** Each channel is also a channel of rex's **Live TV**, with its own number and
+  what is on it: Plex Web and Plex for Android show the guide and What's On, and play a channel from there.
+  See [Live TV](#live-tv).
 
 ![The Live Sports library in Plex Web: each channel's logo, or its name where it has none](docs/plex-library.webp)
 
@@ -84,15 +87,42 @@ Edit `config.json` and restart:
 | `rex_url` | `http://127.0.0.1:32400` | rex's address |
 | `listen` | `127.0.0.1:9983` | Where the relay answers. rex reads each channel and its pictures through it |
 | `relay_url` | `http://<listen>` | The address rex reads the relay at, when rex runs on another machine or in Docker |
-| `groups` | `["Live:", "Sports"]` | Which of live-sports' groups to take, by how their names start. `["Live:"]` takes only events and 24/7 event channels; add `"TV:"` for its general TV |
+| `groups` | `["Live:", "Sports"]` | Which of live-sports' groups to take, by how their names start. `["Live:"]` takes only events and 24/7 event channels; add `"TV:"` for its general TV and `"Pluto:"` for Pluto TV's channels |
 | `library` | `Live Sports` | The library's name in rex |
 | `directory` | `live-sports` | The folder the channels are under. A change makes them new items in rex |
 | `mount` | `/mnt/rex-live-sports` | The folder name rex shows for these files. Nothing is mounted |
 | `source` | `live-sports` | The name rex knows this source by |
-| `cache` | `cache` | Where each channel's stream check is kept |
+| `cache` | `cache` | Where stream checks, channel numbers and guides are kept |
 | `ffprobe`, `ffmpeg` | `ffprobe`, `ffmpeg` | The ffprobe and ffmpeg to use |
 | `interval_minutes` | `5` | How often to sync |
 | `probe_hours` | `24` | How long a channel's stream check is kept |
+| `live_tv` | `true` | Each channel is also a channel of rex's Live TV. `false` takes them out of it; they stay in the library |
+
+## Live TV
+
+rex shows the channels in **Live TV** in Plex Web and Plex for Android as well, as a tuner with a guide would.
+The library stays as it is. It needs a rex nightly dated 2026.11.02 or newer; an older rex ignores it.
+
+- **Numbers.** A channel's number is its group's and its own: `100.1`, `100.2`, then `101.1` for
+  the next group, clear of the low numbers a tuner or another source uses (rex has one guide for
+  all of them). Groups are numbered in the order of their names (`Live: ...` first, then
+  `Sports`, `Sports: Argentina` and so on), and the channels of a group in the order of theirs.
+  A channel keeps its number while live-sports lists it at least once a week, wherever its group
+  goes; after that the number is free for a new channel. New channels and groups take the lowest
+  number free. The numbers are kept in `cache/channels.json`.
+- **Guides.** A Pluto TV channel (the `Pluto:` groups) gets Pluto TV's own schedule. Any other
+  channel gets [epgshare01](https://epgshare01.online/)'s guide of the channel of its name in its
+  country: the one its name or group names (`ESPN (Argentina)`, `Sky Sports F1 UK`,
+  `Sports: Spain`), else the one iptv-org gives a channel of that name. Both are free and need no
+  key. Guides are fetched every 12 hours, from three hours back to two days ahead.
+- **Every other channel**, and every single match (`Real Madrid vs Barcelona`), shows its own
+  name in the guide, in blocks of six hours, under its group's sport (`Live: Football` is
+  Sports and Football).
+
+Measured on 2026-11-01 on a live-sports server's channels: Pluto TV had the schedule of all 197
+of its own, epgshare01 the guide of 202 of 689 sports channels and 133 of 348 general TV ones.
+Many of the rest are named by an event, a server or a backup (`DAZN EVENT 5 HD .b`), which no
+guide lists.
 
 ## Limits
 
@@ -110,6 +140,12 @@ Edit `config.json` and restart:
   it starts), rex keeps them all for up to half an hour, while live-sports checks them again.
 - Anyone who can reach `listen` can use the relay to reach your live-sports server. Keep it on
   `127.0.0.1` unless rex runs elsewhere.
+- Guides are matched by name, like logos, so a channel can get the guide of another feed of the
+  same brand (Sky Sports Cricket gets Ireland's, the same programmes).
+- Plex files a guide programme with no episode number as a film, as it does with any XMLTV
+  guide, so matches and the names of channels with no guide also show under What's On's films.
+- epgshare01's guides for the countries of live-sports' sports channels are about 100 MB, kept
+  in `cache/guides` and downloaded again only when epgshare01 has rebuilt them.
 
 ## Tests
 
@@ -119,7 +155,8 @@ REX_BIN=/path/to/rex python3 -m unittest discover -s tests   # also syncs into a
 ```
 
 The fixtures are a real live-sports catalog (1,117 channels, 624 of them sports), a real
-channel's probe and iptv-org's channel and logo lists for those names.
+channel's probe, iptv-org's channel and logo lists for those names, and real guides: Pluto TV's
+schedule of three channels and epgshare01's UK guide of four.
 
 ## License
 

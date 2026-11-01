@@ -20,14 +20,24 @@ The pictures are made here, with ffmpeg: rex fetches artwork only from public ho
 source itself, and live-sports' own poster is an SVG on your network. A channel iptv-org has a
 logo for gets that logo; any other its name.
 
+Each channel is also a channel of rex's Live TV (`live_tv`), with a number that stays its own and
+a guide: Pluto TV's own schedule for a Pluto TV channel, epgshare01's XMLTV for a channel it finds
+there by name and country, and the channel's name in blocks of six hours for the rest.
+
 Standard library only; ffprobe and ffmpeg are separate executables.
 """
 import argparse
+import calendar
+import datetime
+import email.utils
+import gzip
 import hashlib
+import itertools
 import json
 import logging
 import os
 import re
+import shutil
 import subprocess
 import sys
 import textwrap
@@ -36,6 +46,7 @@ import time
 import urllib.error
 import urllib.parse
 import urllib.request
+import xml.etree.ElementTree as ET
 from concurrent.futures import ThreadPoolExecutor
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
@@ -57,6 +68,7 @@ DEFAULTS = {
     "ffmpeg": "ffmpeg",
     "interval_minutes": 5,
     "probe_hours": 24,
+    "live_tv": True,
 }
 
 CHANNEL = re.compile(r"[A-Za-z0-9_.-]+")
@@ -64,6 +76,14 @@ CHANNEL = re.compile(r"[A-Za-z0-9_.-]+")
 AGENT = "rex-live-sports (https://github.com/debridmediamanager/rex-live-sports)"
 
 IPTV_ORG = "https://iptv-org.github.io/api"
+
+# Guides: free, no key. epgshare01 rebuilds its per-country XMLTV files a few times a day (about
+# 100 MB of them for live-sports' sports channels, 2026-11-01); Pluto TV's own API answers the
+# schedule of the country it is asked from, which is live-sports' when both run at home.
+EPGSHARE01 = "https://epgshare01.online/epgshare01/"
+PLUTO_TV = "https://api.pluto.tv/v2/channels"
+GUIDE_HOURS = 12  # how often guides are fetched again
+PLACEHOLDER_HOURS = 6
 
 # live-sports' own poster colour, behind a channel's name and behind a logo drawn in light colours.
 DARK, LIGHT = "0x1a1a2e", "0xf2f2f2"
@@ -73,9 +93,26 @@ SHAPES = {"poster": (600, 900, 480), "art": (1280, 720, 400)}
 
 
 def get_json(url, timeout=60):
-    request = urllib.request.Request(url, headers={"User-Agent": "rex-live-sports", "Accept": "application/json"})
+    request = urllib.request.Request(url, headers={"User-Agent": "rex-live-sports", "Accept": "application/json",
+                                                  "Accept-Encoding": "gzip"})
     with urllib.request.urlopen(request, timeout=timeout) as response:
-        return json.loads(response.read() or b"{}")
+        data = response.read()
+        return json.loads((gzip.decompress(data) if response.headers.get("Content-Encoding") == "gzip" else data) or b"{}")
+
+
+def download(url, path):
+    """`url` into `path`, unless it has not changed since `path` was written."""
+    headers = {"User-Agent": AGENT}
+    if os.path.exists(path):
+        headers["If-Modified-Since"] = email.utils.formatdate(os.path.getmtime(path), usegmt=True)
+    try:
+        with urllib.request.urlopen(urllib.request.Request(url, headers=headers), timeout=300) as response:
+            with open(path + ".tmp", "wb") as handle:
+                shutil.copyfileobj(response, handle)
+        os.replace(path + ".tmp", path)
+    except urllib.error.HTTPError as error:
+        if error.code != 304:
+            raise
 
 
 def fetch(url):
@@ -158,6 +195,158 @@ def logo_for(index, name):
     return next((url for at, url in found if at == code), found[0][1] if found else None)
 
 
+def country_names(index):
+    """iptv-org's countries by name, and by code where a name writes it in capitals (`Sky Sports
+    F1 UK`, `Fox Sports 1 USA`): not `TV` (Tuvalu's), which names a channel, not a country."""
+    names = {name: code for name, code in index["countries"].items() if name}
+    names.update({code: code for code in names.values() if code != "TV"}, USA="US", GB="UK")
+    return names
+
+
+def country_tail(names, name):
+    """The name without the country it ends in, and that country's code (`ESPN Argentina`,
+    `Sky Sport 1 NZ`)."""
+    bare = re.sub(r"\([^)]*\)\s*$", "", name).strip()
+    for country, code in sorted(names.items(), key=lambda pair: -len(pair[0])):
+        written = bare if country.isupper() else bare.lower()
+        if written.endswith(" " + country):
+            return bare[:-len(country)].strip(), code
+    return bare, None
+
+
+def countries(index, meta):
+    """The countries a channel is of: those its name or its group names (`ESPN (Argentina)`,
+    `ESPN (United States) HD (720p)`, `Sports: Spain`, `Sky Sports F1 UK`), else those of
+    iptv-org's channels of its name."""
+    names = country_names(index)
+    name, group = str(meta.get("name") or ""), str(meta.get("genre") or "")
+    def code(text):
+        return names.get(text.strip().lower(), names.get(text.strip().upper()))
+    named = {code(text) for text in re.findall(r"\(([^)]+)\)", name) + [group.partition(":")[2]]}
+    named = (named | {country_tail(names, name)[1]}) - {None}
+    return named or {country for country, _ in index["names"].get(plain(name)) or []}
+
+
+def variants(index, name):
+    """The plain names a channel's guide can go by: its own, without live-sports' mirror mark
+    (`SPORT 1 .c`) and without the country it ends in (`Sky Sport 1 NZ`)."""
+    whole = re.sub(r"\s\.\w+$", "", name)
+    return {plain(name), plain(whole), plain(country_tail(country_names(index), whole)[0])} - {""}
+
+
+def epoch(text):
+    """An XMLTV time (`20261101101903 +0000`) or an ISO 8601 one (Pluto TV's) as epoch seconds."""
+    text = text.strip()
+    if text[:14].isdigit():
+        zone = re.search(r"([+-])(\d\d)(\d\d)$", text)
+        offset = (int(zone[2]) * 3600 + int(zone[3]) * 60) * (1 if zone[1] == "+" else -1) if zone else 0
+        return calendar.timegm(time.strptime(text[:14], "%Y%m%d%H%M%S")) - offset
+    return int(datetime.datetime.fromisoformat(text.replace("Z", "+00:00")).timestamp())
+
+
+def xmltv_programme(element):
+    """An XMLTV `<programme>` as a guide programme: an episode when it has its season and episode
+    (`xmltv_ns` counts both from 0, `onscreen` writes S02E04), else a programme of its own."""
+    title = (element.findtext("title") or "").strip()
+    if not title:
+        return None
+    out = {"start": epoch(element.get("start")), "end": epoch(element.get("stop")), "title": title}
+    numbers = None
+    for number in element.findall("episode-num"):
+        text = (number.text or "").strip()
+        parts = [part.split("/")[0].strip() for part in text.split(".")]
+        if number.get("system") == "xmltv_ns" and len(parts) > 1 and parts[0].isdigit() and parts[1].isdigit():
+            numbers = (int(parts[0]) + 1, int(parts[1]) + 1)
+        elif number.get("system") == "onscreen" and numbers is None and re.fullmatch(r"S\d+\s*E\d+", text, re.I):
+            numbers = tuple(int(part) for part in re.findall(r"\d+", text))
+    if numbers:
+        out.update(type="episode", show=title, season=numbers[0], episode=numbers[1],
+                   title=(element.findtext("sub-title") or "").strip() or "Episode %d" % numbers[1])
+    summary = (element.findtext("desc") or "").strip()
+    categories = [text.strip() for text in (category.text for category in element.findall("category")) if text and text.strip()]
+    thumb = element.find("icon")
+    for field, value in (("summary", summary), ("categories", categories),
+                         ("thumb", thumb is not None and thumb.get("src", "").startswith(("http://", "https://")) and thumb.get("src")),
+                         ("previously_shown", element.find("previously-shown") is not None)):
+        if value:
+            out[field] = value
+    return out
+
+
+def xmltv(stream, code, wanted, since, until):
+    """One XMLTV guide's channels by a name in `wanted` (plain names): ({plain name: [(country,
+    channel id)]}, {channel id: [programme]}), with the programmes between `since` and `until`."""
+    names, programmes = {}, {}
+    for _, element in ET.iterparse(stream):
+        if element.tag == "channel":
+            for name in {plain(name.text or "") for name in element.findall("display-name")} & wanted:
+                names.setdefault(name, []).append((code, element.get("id")))
+                programmes.setdefault(element.get("id"), [])
+            element.clear()
+        elif element.tag == "programme":
+            if element.get("channel") in programmes:
+                try:
+                    programme = xmltv_programme(element)
+                except (TypeError, ValueError):
+                    programme = None
+                if programme and programme["end"] > since and programme["start"] < until and programme["end"] > programme["start"]:
+                    programmes[element.get("channel")].append(programme)
+            element.clear()
+    return names, programmes
+
+
+def pluto_programme(entry):
+    """A Pluto TV timeline entry as a guide programme: an episode of a series under its own title,
+    anything else (a film, a race) under the slot's. Pluto TV airs only repeats, but live."""
+    episode = entry.get("episode") or {}
+    series = episode.get("series") or {}
+    def known(text):
+        return text.strip() if isinstance(text, str) and text.strip() and text != "no info available" else None
+    out = {"start": epoch(entry["start"]), "end": epoch(entry["stop"]),
+           "title": known(entry.get("title")) or known(episode.get("name")) or known(series.get("name"))}
+    if not out["title"] or out["end"] <= out["start"]:
+        return None
+    season, number = episode.get("season"), episode.get("number")
+    if series.get("type") == "tv" and isinstance(season, int) and isinstance(number, int) and season >= 0 and number > 0:
+        out.update(type="episode", show=known(series.get("name")) or out["title"], season=season, episode=number,
+                   title=known(episode.get("name")) or out["title"])
+    for field, value in (("summary", known(episode.get("description"))),
+                         ("categories", list(dict.fromkeys(genre for genre in (known(episode.get("genre")), known(episode.get("subGenre"))) if genre))),
+                         ("thumb", str((episode.get("thumbnail") or {}).get("path") or "").startswith("https://")
+                          and episode["thumbnail"]["path"]),
+                         ("previously_shown", not episode.get("liveBroadcast"))):
+        if value:
+            out[field] = value
+    return out
+
+
+def categories_of(group):
+    """A group's categories in the guide: `Live: Football` is ["Sports", "Football"], any
+    `Sports...` group ["Sports"], `Pluto: Crime` ["Crime"]; general TV none."""
+    head, _, tail = group.partition(":")
+    return (["Sports"] if head in ("Live", "Sports") else []) + ([tail.strip()] if head in ("Live", "Pluto") and tail.strip() else [])
+
+
+def placeholder(meta, now):
+    """A guide for a channel no guide lists, and for a single match: its name, in blocks of
+    PLACEHOLDER_HOURS (UTC) from the block before now to a day after the next, so that every
+    channel has a row in Plex's guide. They change only when a block passes."""
+    block = PLACEHOLDER_HOURS * 3600
+    first = int(now) - int(now) % block - block
+    categories = categories_of(str(meta.get("genre") or ""))
+    return [dict({"start": start, "end": start + block, "title": str(meta.get("name") or "")},
+                 **({"categories": categories} if categories else {}))
+            for start in range(first, first + 6 * block, block)]
+
+
+def live(probe):
+    """A probe with no duration: what rex takes a Live TV channel for."""
+    try:
+        return not float((probe.get("format") or {}).get("duration") or 0) > 0
+    except ValueError:
+        return True
+
+
 def item(config, key, meta, probe, art=None):
     """One feed item: a live channel nothing identifies, named by `display`, in its group's
     collection. Its own release, or rex would group every channel of the folder as one."""
@@ -193,6 +382,10 @@ class Sync:
         self.picky = None
         self.logos, self.logos_at = None, 0
         self.routes = {}  # key -> the channel id the relay plays it from
+        self.guides, self.guides_at, self.guides_for = None, 0, 0
+        self.numbered = None
+        self.pushed = {}  # item id -> its channel as last pushed, which rex keeps while an item has none
+        self.now = time.time
 
     def rex(self, method, path, body=None):
         request = urllib.request.Request(self.config["rex_url"].rstrip("/") + path, method=method,
@@ -291,6 +484,138 @@ class Sync:
                 self.logos = {"names": {}, "countries": {}}
         self.logos_at = time.time()
         return self.logos
+
+    def numbers(self, metas, now):
+        """Each channel's number in the guide, `<group>.<n>`, kept in `channels.json`: a group gets
+        the lowest number from 100 no group holds (rex's guide is one for every source, and
+        another's, or a tuner's, are the low ones: `2.1`), a channel the lowest one free in its
+        group, both in the
+        order of their names the first time they are numbered. A channel keeps its number while
+        live-sports lists it at least once a week, wherever its group goes (a week this does not
+        run does not count); after that its number is free again, and its group's once none of its
+        channels is left."""
+        path = os.path.join(self.config["cache"], "channels.json")
+        if self.numbered is None:
+            try:
+                with open(path) as handle:
+                    self.numbered = json.load(handle)
+            except (OSError, ValueError):
+                self.numbered = {"groups": {}, "channels": {}}
+        groups, channels = self.numbered["groups"], self.numbered["channels"]
+        last = max((seen for _, seen in channels.values()), default=now)
+        for key in [key for key, (_, seen) in channels.items() if last - seen > 7 * 86400]:
+            del channels[key]
+        held = {number.split(".")[0] for number, _ in channels.values()}
+        for group in [group for group, number in groups.items() if str(number) not in held]:
+            del groups[group]
+        for key, meta in sorted(metas.items(), key=lambda pair: (str(pair[1].get("genre") or ""), str(pair[1].get("name") or ""))):
+            if key not in channels:
+                group = str(meta.get("genre") or "")
+                if group not in groups:
+                    groups[group] = next(number for number in itertools.count(100) if number not in groups.values())
+                taken = {number for number, _ in channels.values()}
+                channels[key] = [next(number for number in ("%d.%d" % (groups[group], at) for at in itertools.count(1))
+                                      if number not in taken), now]
+            channels[key][1] = now
+        os.makedirs(self.config["cache"], exist_ok=True)
+        with open(path + ".tmp", "w") as handle:
+            json.dump(self.numbered, handle)
+        os.replace(path + ".tmp", path)
+        return {key: channels[key][0] for key in metas}
+
+    def guide_index(self, metas):
+        """The guides of the listed channels' sources, fetched every GUIDE_HOURS, programmes from
+        three hours back (rex lists an airing until three hours after it ends) to two days ahead:
+        Pluto TV's schedule when a Pluto TV channel is listed, and epgshare01's XMLTV files of
+        the countries the other channels are of, each downloaded again only when it changed.
+        Fetched again sooner for twice as many channels as it was fetched for: live-sports lists
+        a few while it starts."""
+        now = self.now()
+        if self.guides is not None and now - self.guides_at < GUIDE_HOURS * 3600 and len(metas) < 2 * self.guides_for:
+            return self.guides
+        since, until = now - 3 * 3600, now + 48 * 3600
+        guides = {"names": {}, "programmes": {}}
+        if any(str(meta.get("id")).startswith("lstv-pl-") for meta in metas):
+            stamp = lambda at: time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(at))
+            try:
+                for channel in get_json("%s?start=%s&stop=%s" % (PLUTO_TV, stamp(since), stamp(until)), 120):
+                    guides["programmes"]["pluto:" + str(channel.get("_id"))] = [
+                        programme for programme in map(pluto_programme, channel.get("timelines") or []) if programme]
+            except Exception as error:
+                LOG.warning("Pluto TV guide: %s", error)
+        index, wanted, codes = self.logo_index(), set(), set()
+        for meta in metas:
+            if not str(meta.get("id")).startswith("lstv-pl-"):
+                wanted |= variants(index, str(meta.get("name") or ""))
+                codes |= countries(index, meta)
+        folder = os.path.join(self.config["cache"], "guides")
+        os.makedirs(folder, exist_ok=True)
+        try:
+            with urllib.request.urlopen(urllib.request.Request(EPGSHARE01, headers={"User-Agent": AGENT}), timeout=60) as response:
+                listing = response.read().decode(errors="replace")
+        except Exception as error:
+            LOG.warning("epgshare01: %s", error)
+            listing = " ".join('"%s"' % name for name in os.listdir(folder))
+        # Per country (`epg_ripper_UK1`, `epg_ripper_US_SPORTS1`); not US_LOCALS1, 57 MB of local stations.
+        for name, code in sorted(set(re.findall(r'"(epg_ripper_([A-Z]{2})(?:_SPORTS)?\d+\.xml\.gz)"', listing))):
+            if code not in codes:
+                continue
+            path = os.path.join(folder, name)
+            try:
+                download(EPGSHARE01 + name, path)
+            except Exception as error:
+                LOG.warning("epgshare01 %s: %s", name, error)
+                if not os.path.exists(path):
+                    continue
+            try:
+                with gzip.open(path) as stream:
+                    names, programmes = xmltv(stream, code, wanted, since, until)
+            except (OSError, EOFError, ET.ParseError) as error:
+                LOG.warning("epgshare01 %s: %s", name, error)
+                continue
+            for plain_name, found in names.items():
+                guides["names"].setdefault(plain_name, []).extend(found)
+            guides["programmes"].update(programmes)
+        LOG.info("guides: %d channels", sum(1 for programmes in guides["programmes"].values() if programmes))
+        self.guides, self.guides_at, self.guides_for = guides, now, len(metas)
+        return guides
+
+    def guide(self, guides, meta, now):
+        """A channel's guide: Pluto TV's for its Pluto TV channel; else epgshare01's for a channel
+        of its name of one of its countries, or, when it is of no country known, of the only
+        channel of its name; else its name."""
+        channel = str(meta.get("id"))[len("lstv-"):]
+        if channel.startswith("pl-"):
+            return guides["programmes"].get("pluto:" + channel[3:]) or placeholder(meta, now)
+        index = self.logo_index()
+        codes = countries(index, meta)
+        for name in sorted(variants(index, str(meta.get("name") or "")), key=len, reverse=True):
+            found = guides["names"].get(name) or []
+            for at in [at for code, at in found if code in codes] or ([found[0][1]] if not codes and len({at for _, at in found}) == 1 else []):
+                if guides["programmes"].get(at):
+                    return guides["programmes"][at]
+        return placeholder(meta, now)
+
+    def live_tv(self, items, metas):
+        """Gives each item its Live TV channel, when it changed since it was last pushed: rex
+        keeps the channel of an item pushed without one, and a guide moves only every few hours.
+        `"channel": null` when `live_tv` is off, which ends a channel rex holds. Answers each
+        item's channel as pushed."""
+        now = self.now()
+        numbers = self.numbers(metas, now) if self.config["live_tv"] else {}
+        guides = self.guide_index(list(metas.values())) if self.config["live_tv"] else None
+        sent = {}
+        for entry in items:
+            meta, channel = metas[entry["id"]], None
+            if self.config["live_tv"] and live(entry["media_info"]):
+                name = str(meta.get("name") or entry["name"])
+                channel = {"number": numbers[entry["id"]], "title": name,
+                           "call_sign": re.sub(r"\s*\([^)]*\)", "", name).strip() or name,
+                           "guide": self.guide(guides, meta, now)}
+            sent[entry["id"]] = json.dumps(channel, sort_keys=True)
+            if self.pushed.get(entry["id"]) != sent[entry["id"]]:
+                entry["channel"] = channel
+        return sent
 
     def luma(self, source, background):
         """The picture's mean brightness (0-255) drawn on a background, by ffmpeg."""
@@ -404,6 +729,8 @@ class Sync:
                 items.append(item(self.config, key, meta, probe, pictures))
         if not items:
             return
+
+        sent = self.live_tv(items, {"ls-" + key: meta for key, _, meta in listed})
         try:
             answer = self.snapshot(items, force=False)
         except urllib.error.HTTPError as error:
@@ -421,12 +748,14 @@ class Sync:
                     return
             answer = self.snapshot(items, force=True)
         self.short_since = None
-        LOG.info("pushed %d of %d channels: %s", len(items), len(listed),
-                 {key: answer.get(key) for key in ("created", "updated", "removed")})
+        self.pushed = {key: channel for key, channel in sent.items() if key not in self.rejected}
+        LOG.info("pushed %d of %d channels, %d with their Live TV channel: %s", len(items), len(listed),
+                 sum(1 for entry in items if "channel" in entry), {key: answer.get(key) for key in ("created", "updated", "removed")})
 
     def snapshot(self, items, force):
         session = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
         chunks = [items[at:at + 200] for at in range(0, len(items), 200)]
+        self.rejected = set()
         for part, chunk in enumerate(chunks):
             last = part == len(chunks) - 1
             body = {"session": session, "part": part, "complete": last, "items": chunk}
@@ -435,6 +764,7 @@ class Sync:
             answer = self.rex("PUT", "/rex/feed/%s/snapshot" % self.config["source"], body)
             for rejected in answer.get("rejected") or []:
                 LOG.warning("rex rejected %s: %s", rejected.get("id"), rejected.get("reason"))
+                self.rejected.add(rejected.get("id"))
         return answer
 
     def forever(self):

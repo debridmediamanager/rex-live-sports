@@ -1,0 +1,273 @@
+[
+ {
+  "_id": "5c5c3b948002db3c3e0b262e",
+  "name": "Pluto TV Movies",
+  "number": 242,
+  "timelines": [
+   {
+    "start": "2026-11-01T10:00:00.000Z",
+    "stop": "2026-11-01T10:03:42.000Z",
+    "title": "Pluto TV Movies",
+    "episode": {
+     "name": "Pluto TV Movies",
+     "description": "no info available",
+     "number": 0,
+     "genre": "no info available",
+     "subGenre": "no info available",
+     "liveBroadcast": false,
+     "thumbnail": {
+      "path": "https://images.pluto.tv/channels/5c5c3b948002db3c3e0b262e/featuredImage.jpg?fill=blur&fit=fill&fm=jpg&h=900&q=75&w=1600"
+     },
+     "series": {
+      "name": "Pluto TV Movies",
+      "type": "no info available"
+     }
+    }
+   },
+   {
+    "start": "2026-11-01T10:03:42.000Z",
+    "stop": "2026-11-01T12:19:03.000Z",
+    "title": "Der schwarze Hengst",
+    "episode": {
+     "name": "Der schwarze Hengst",
+     "description": "Teri Garr und Mickey Rooney spielen die Hauptrolle in diesem herzerwärmenden Abenteuer über die besondere Freundschaft eines Jungen mit einem wilden Hengst, die beide auf einer einsamen Insel Schiffbruch erlitten haben.",
+     "season": 1,
+     "number": 1,
+     "genre": "Action & Adventure",
+     "subGenre": "Adventures",
+     "liveBroadcast": false,
+     "thumbnail": {
+      "path": "https://images.pluto.tv/episodes/6abe78447a5624e68dceb9f3/thumbnail_1790867525664.jpg?fill=blur&fit=fill&fm=jpg&h=440&q=75&w=440"
+     },
+     "series": {
+      "name": "Der schwarze Hengst",
+      "type": "film"
+     }
+    }
+   },
+   {
+    "start": "2026-11-01T12:19:03.000Z",
+    "stop": "2026-11-01T14:38:03.000Z",
+    "title": "Mclintock! (Producer's Cut)",
+    "episode": {
+     "name": "MacLintock",
+     "description": "Der Duke spielt George Washington McLintock, einen trotzigen Viehbaron, dessen Tochter Becky gerade aus dem College zurück ist. G.W.s Wiedersehen mit seiner Tochter wird durch die Ankunft seiner Frau Katherine getrübt, die ihn verlassen hat.",
+     "season": 1,
+     "number": 1,
+     "genre": "Western",
+     "subGenre": "Western",
+     "liveBroadcast": false,
+     "thumbnail": {
+      "path": "https://images.pluto.tv/episodes/6243221fd16300001393f1b7/thumbnail.jpg?fill=blur&fit=fill&fm=jpg&h=440&q=75&w=440"
+     },
+     "series": {
+      "name": "Mclintock! (Producer's Cut)",
+      "type": "film"
+     }
+    }
+   },
+   {
+    "start": "2026-11-01T14:38:03.000Z",
+    "stop": "2026-11-01T17:00:03.000Z",
+    "title": "Der Sieger",
+    "episode": {
+     "name": "Der Sieger",
+     "description": "Ein amerikanischer Ex-Boxer kehrt nach Irland zurück, um die Hand einer jungen Frau zu gewinnen. Er wird mit den lokalen Bräuchen und dem streitlustigen Bruder der Frau konfrontiert. Ein Film mit wunderschönen Kulissen und lokalem Charme.",
+     "season": 1,
+     "number": 1,
+     "genre": "Romance",
+     "subGenre": "Romance Classics",
+     "liveBroadcast": false,
+     "thumbnail": {
+      "path": "https://images.pluto.tv/episodes/62fb9dca85bbed001af86198/thumbnail.jpg?fill=blur&fit=fill&fm=jpg&h=440&q=75&w=440"
+     },
+     "series": {
+      "name": "Der Sieger",
+      "type": "film"
+     }
+    }
+   }
+  ]
+ },
+ {
+  "_id": "5e7cb84a172a0f0007da69e4",
+  "name": "Red Bull TV",
+  "number": 26,
+  "timelines": [
+   {
+    "start": "2026-11-01T09:27:00.000Z",
+    "stop": "2026-11-01T11:10:00.000Z",
+    "title": "Red Bull Soapbox Race",
+    "episode": {
+     "name": "Alexandra Palace",
+     "description": "Beim Red Bull Seifenkistenrennen 2024 in London waren 59 Teams dabei, die sich auf einem kniffligen Parcours im Alexandra Palace abwärts bewegten und dabei versuchten, ihre von der Schwerkraft angetriebenen Fahrzeuge intakt zu halten.",
+     "season": 1,
+     "number": 0,
+     "genre": "Sports",
+     "subGenre": "Sports",
+     "liveBroadcast": true,
+     "thumbnail": {
+      "path": "https://images.pluto.tv/episodes/6adf825ceb2f854555f27b01/thumbnail_1793032797615.jpg?fill=blur&fit=fill&fm=jpg&h=440&q=75&w=440"
+     },
+     "series": {
+      "name": "Red Bull Soapbox Race",
+      "type": "live"
+     }
+    }
+   },
+   {
+    "start": "2026-11-01T11:10:00.000Z",
+    "stop": "2026-11-01T12:00:00.000Z",
+    "title": "Red Bull Soapbox Race",
+    "episode": {
+     "name": "Helsinski",
+     "description": "Beim Red Bull Seifenkistenrennen in Helsinki gerät das Geschehen völlig außer Kontrolle. Erleben Sie rasante Abfahrten, kreative Konstruktionen und jede Menge Chaos auf der anspruchsvollen Strecke. Unvergessliche Momente stehen auf dem Programm.",
+     "season": 1,
+     "number": 0,
+     "genre": "Sports",
+     "subGenre": "Sports",
+     "liveBroadcast": true,
+     "thumbnail": {
+      "path": "https://images.pluto.tv/episodes/69ea426ebf777112246a83c8/thumbnail_1776960111023.jpg?fill=blur&fit=fill&fm=jpg&h=440&q=75&w=440"
+     },
+     "series": {
+      "name": "Red Bull Soapbox Race",
+      "type": "live"
+     }
+    }
+   },
+   {
+    "start": "2026-11-01T12:00:00.000Z",
+    "stop": "2026-11-01T13:14:00.000Z",
+    "title": "Mountain Bike",
+    "episode": {
+     "name": "Emerald Storm - A History of Irish Downhill MTB",
+     "description": "Wir zeigen den Aufstieg von Irlands Top-MTB-Fahrern von ihren Anfängen bis zur globalen Bühne.",
+     "season": 1,
+     "number": 0,
+     "genre": "Sports",
+     "subGenre": "Sports",
+     "liveBroadcast": true,
+     "thumbnail": {
+      "path": "https://images.pluto.tv/episodes/6adf825ceb2f854555f27b3f/thumbnail_1793032797880.jpg?fill=blur&fit=fill&fm=jpg&h=440&q=75&w=440"
+     },
+     "series": {
+      "name": "Mountain Bike",
+      "type": "live"
+     }
+    }
+   },
+   {
+    "start": "2026-11-01T13:14:00.000Z",
+    "stop": "2026-11-01T13:42:00.000Z",
+    "title": "Mountainbike Highlights",
+    "episode": {
+     "name": "Red Bull Stuttgart Cerro Abajo",
+     "description": "Stuttgarts Straßen werden zur spektakulären Downhill-Arena: Die globale MTB-Elite jagt mit rasantem Tempo durch Parks, Treppen und vorbei an Denkmälern - wer schnappt sich die Cerro-Abajo-Krone 2026?",
+     "season": 1,
+     "number": 0,
+     "genre": "Sports",
+     "subGenre": "Sports",
+     "liveBroadcast": true,
+     "thumbnail": {
+      "path": "https://images.pluto.tv/episodes/6accc52e241cd01dd82f2cde/thumbnail_1791804719985.jpg?fill=blur&fit=fill&fm=jpg&h=440&q=75&w=440"
+     },
+     "series": {
+      "name": "Mountainbike Highlights",
+      "type": "live"
+     }
+    }
+   }
+  ]
+ },
+ {
+  "_id": "686cffbf3ffa5e0c91cdcfb3",
+  "name": "21 Jump Street",
+  "number": 372,
+  "timelines": [
+   {
+    "start": "2026-11-01T10:00:00.000Z",
+    "stop": "2026-11-01T10:31:21.000Z",
+    "title": "21 Jump Street",
+    "episode": {
+     "name": "21 Jump Street",
+     "description": "no info available",
+     "number": 0,
+     "genre": "no info available",
+     "subGenre": "no info available",
+     "liveBroadcast": false,
+     "thumbnail": {
+      "path": "https://images.pluto.tv/channels/686cffbf3ffa5e0c91cdcfb3/featuredImage_1751973878295.jpg?fill=blur&fit=fill&fm=jpg&h=900&q=75&w=1600"
+     },
+     "series": {
+      "name": "21 Jump Street",
+      "type": "no info available"
+     }
+    }
+   },
+   {
+    "start": "2026-11-01T10:31:21.000Z",
+    "stop": "2026-11-01T11:25:46.000Z",
+    "title": "21 Jump Street",
+    "episode": {
+     "name": "Veränderungen",
+     "description": "In den Sommerferien pausiert das Jump Street-Programm. Ist das schon das Ende für das Projekt?",
+     "season": 2,
+     "number": 22,
+     "genre": "Action & Adventure",
+     "subGenre": "Crime Action",
+     "liveBroadcast": false,
+     "thumbnail": {
+      "path": "https://images.pluto.tv/episodes/6881f613cb153898344415e3/thumbnail_1753347605503.jpg?fill=blur&fit=fill&fm=jpg&h=440&q=75&w=440"
+     },
+     "series": {
+      "name": "21 Jump Street",
+      "type": "tv"
+     }
+    }
+   },
+   {
+    "start": "2026-11-01T11:25:46.000Z",
+    "stop": "2026-11-01T12:21:34.000Z",
+    "title": "21 Jump Street: Der Spitzel",
+    "episode": {
+     "name": "Der Spitzel",
+     "description": "Dennis Booker ist neu bei der Jump Street und lässt sich sogleich auf einen Undercover-Einsatz ein.",
+     "season": 3,
+     "number": 1,
+     "genre": "Action & Adventure",
+     "subGenre": "Crime Action",
+     "liveBroadcast": false,
+     "thumbnail": {
+      "path": "https://images.pluto.tv/episodes/685a6d494550849057292d1c/thumbnail_1750756684562.jpg?fill=blur&fit=fill&fm=jpg&h=440&q=75&w=440"
+     },
+     "series": {
+      "name": "21 Jump Street",
+      "type": "tv"
+     }
+    }
+   },
+   {
+    "start": "2026-11-01T12:21:34.000Z",
+    "stop": "2026-11-01T13:17:22.000Z",
+    "title": "21 Jump Street: Die Bürgerwehr",
+    "episode": {
+     "name": "Die Bürgerwehr",
+     "description": "Ein Dealer will den Anführer der Bürgerwehr umbringen. Hoffs und Ioki werden deshalb bei der Gruppe eingeschleust.",
+     "season": 3,
+     "number": 2,
+     "genre": "Action & Adventure",
+     "subGenre": "Crime Action",
+     "liveBroadcast": false,
+     "thumbnail": {
+      "path": "https://images.pluto.tv/episodes/685a6a79f377ee6b2cc3bf8d/thumbnail_1750755963866.jpg?fill=blur&fit=fill&fm=jpg&h=440&q=75&w=440"
+     },
+     "series": {
+      "name": "21 Jump Street",
+      "type": "tv"
+     }
+    }
+   }
+  ]
+ }
+]

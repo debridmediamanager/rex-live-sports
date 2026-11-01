@@ -1,10 +1,14 @@
 """rex-live-sports against a real live-sports catalog (zen, 2026-10-26), a real channel's probe
-and iptv-org's real channel and logo lists, cut to the names in that catalog.
+and iptv-org's real channel and logo lists, cut to the names in that catalog; and real guides
+(2026-11-01): Pluto TV's schedule of three of its channels, epgshare01's listing and its UK
+guide, cut to four channels from 08:00 to 20:00 UTC.
 
 `AgainstRex` also syncs into a real rex binary: REX_BIN.
 
     REX_BIN=/path/to/rex python3 -m unittest discover -s tests
 """
+import gzip
+import io
 import json
 import os
 import socket
@@ -31,6 +35,13 @@ with open(os.path.join(HERE, "fixtures", "probe-slate-cv-2897253.json")) as _han
     SLATE = json.load(_handle)
 with open(os.path.join(HERE, "fixtures", "iptv-org.json")) as _handle:
     IPTV_ORG = json.load(_handle)
+with open(os.path.join(HERE, "fixtures", "pluto-tv.json")) as _handle:
+    PLUTO_TV = json.load(_handle)
+with open(os.path.join(HERE, "fixtures", "epgshare01.html"), "rb") as _handle:
+    EPGSHARE01 = _handle.read()
+with open(os.path.join(HERE, "fixtures", "epgshare01-UK1.xml.gz"), "rb") as _handle:
+    EPGSHARE01_UK = _handle.read()
+NOW = rex_live_sports.epoch("2026-11-01T12:00:00Z")  # when the guides were fetched
 PNG = b"\x89PNG\r\n\x1a\n"
 
 
@@ -58,7 +69,16 @@ def serve(routes, calls):
             self.wfile.write(data)
 
         def do_GET(self):
-            self.answer(200, routes[self.path]) if self.path in routes else self.send_error(404)
+            body = routes.get(self.path, routes.get(self.path.split("?")[0]))
+            if body is None:
+                self.send_error(404)
+            elif isinstance(body, bytes):
+                self.send_response(200)
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+            else:
+                self.answer(200, body)
 
         def do_PUT(self):
             body = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
@@ -88,10 +108,11 @@ def config(work, base, **extra):
 
 
 def offline(test, base, refused=()):
-    """iptv-org's lists from the fixture, served at `base`, and logos fetched from nowhere: a PNG
-    naming its url, or a 404 for a url in `refused`."""
-    rex_live_sports.IPTV_ORG, iptv_org = base + "/iptv-org", rex_live_sports.IPTV_ORG
-    test.addCleanup(setattr, rex_live_sports, "IPTV_ORG", iptv_org)
+    """iptv-org's lists and the guides from the fixtures, served at `base`, and logos fetched from
+    nowhere: a PNG naming its url, or a 404 for a url in `refused`."""
+    for name, url in (("IPTV_ORG", base + "/iptv-org"), ("EPGSHARE01", base + "/epgshare01/"), ("PLUTO_TV", base + "/pluto")):
+        test.addCleanup(setattr, rex_live_sports, name, getattr(rex_live_sports, name))
+        setattr(rex_live_sports, name, url)
 
     def fetch(url):
         if url in refused:
@@ -103,7 +124,9 @@ def offline(test, base, refused=()):
 
 
 def iptv_routes():
-    return {"/iptv-org/%s.json" % name: IPTV_ORG[name] for name in ("channels", "logos", "countries")}
+    """iptv-org's lists and the guides; epgshare01's other files are not found."""
+    return dict({"/iptv-org/%s.json" % name: IPTV_ORG[name] for name in ("channels", "logos", "countries")},
+                **{"/epgshare01/": EPGSHARE01, "/epgshare01/epg_ripper_UK1.xml.gz": EPGSHARE01_UK, "/pluto": PLUTO_TV})
 
 
 class Channels(unittest.TestCase):
@@ -213,7 +236,7 @@ class SyncOnce(unittest.TestCase):
         self.assertNotIn("ls-" + refused, pushed)
         self.assertIn("NFL Network", [item["name"] for item in pushed.values()])
         self.assertNotIn("force", parts[-1])  # nothing in rex to remove
-        self.assertEqual(len([name for name in os.listdir(self.config["cache"]) if name.endswith(".json")]), 624)  # + iptv-org's
+        self.assertEqual(len([name for name in os.listdir(self.config["cache"]) if name.endswith(".json")]), 625)  # + iptv-org's, channels
         self.assertEqual(self.sync.routes["sky-sports-racing"], "dm-sky-sports-racing")
         # Every channel has its pictures, under the relay's url: rex fetches artwork from the
         # source itself, never from a private address it was not registered with.
@@ -365,6 +388,168 @@ class SyncOnce(unittest.TestCase):
         self.sync.once()
         self.assertEqual(self.calls, [])
 
+    def pushed(self):
+        return {item["id"]: item for part in self.snapshots() for item in part["items"]}
+
+    def test_every_channel_is_a_live_tv_channel(self):
+        self.sync.now = lambda: NOW
+        self.sync.once()
+        channels = {key: item["channel"] for key, item in self.pushed().items()}
+        self.assertEqual(len(channels), 619)  # one row a channel name (bd00b1d)
+        self.assertEqual(len({channel["number"] for channel in channels.values()}), 619)
+        football = channels["ls-sky-sports-football-uk"]
+        self.assertEqual({key: football[key] for key in ("title", "call_sign")},
+                         {"title": "Sky Sports Football (UK)", "call_sign": "Sky Sports Football"})
+        # Matched by its name and its country in epgshare01's UK guide: from three hours back.
+        self.assertEqual(football["guide"][0], {
+            "start": NOW - 3 * 3600, "end": NOW - 3 * 3600 + 900, "title": "EFL Highlights",
+            "summary": "Bolton Wanderers v Bristol City in the Championship.",
+            "thumb": "https://tv.assets.pressassociation.io/7bf3220a-0429-5350-b6f8-1206c2cf015a.jpg"})
+        self.assertEqual(channels["ls-sky-sports-football-uk-2"]["guide"], football["guide"])  # `Sky Sports Football UK`
+        self.assertEqual(channels["ls-mutv-uk"]["guide"][0]["categories"], ["Sports", "Football"])
+        # A match, and a channel no guide has: its name, from the block before now to a day on.
+        self.assertEqual(channels["ls-geylang-vs-hougang"]["guide"], rex_live_sports.placeholder(
+            next(meta for meta in CATALOG["metas"] if meta["name"] == "Geylang vs Hougang"), NOW))
+        self.assertEqual(channels["ls-geylang-vs-hougang"]["guide"][0]["categories"], ["Sports", "Singapore Premier League"])
+        # A guide that has not moved is not sent again: rex keeps the channel of an item pushed
+        # without one. A block later the names' guides have, epgshare01's not.
+        self.calls.clear()
+        self.sync.once()
+        self.assertEqual([key for key, item in self.pushed().items() if "channel" in item], [])
+        self.calls.clear()
+        self.sync.now = lambda: NOW + 6 * 3600
+        self.sync.once()
+        sent = [key for key, item in self.pushed().items() if "channel" in item]
+        self.assertIn("ls-geylang-vs-hougang", sent)
+        self.assertNotIn("ls-sky-sports-football-uk", sent)
+        # A channel live-sports stops listing is sent whole when it comes back.
+        meta = next(meta for meta in self.catalog["metas"] if meta["name"] == "Geylang vs Hougang")
+        self.catalog["metas"].remove(meta)
+        self.sync.once()
+        self.catalog["metas"].append(meta)
+        self.calls.clear()
+        self.sync.once()
+        self.assertEqual([key for key, item in self.pushed().items() if "channel" in item], ["ls-geylang-vs-hougang"])
+
+    def test_live_tv_off_ends_the_channels(self):
+        sync = rex_live_sports.Sync(config(self.work, self.config["live_sports_url"], live_tv=False))
+        sync.once()
+        self.assertEqual({repr(item["channel"]) for item in self.pushed().values()}, {"None"})
+        self.assertFalse(os.path.exists(os.path.join(sync.config["cache"], "channels.json")))
+
+    def test_pluto_channels_have_pluto_tvs_guide(self):
+        sync = rex_live_sports.Sync(config(self.work, self.config["live_sports_url"], groups=["Pluto:"]))
+        sync.now = lambda: NOW
+        sync.once()
+        channels = {item["name"]: item["channel"] for item in self.pushed().values()}
+        self.assertEqual(len(channels), 195)
+        jump = channels["21 Jump Street"]["guide"]
+        self.assertEqual(jump, [rex_live_sports.pluto_programme(entry) for entry in PLUTO_TV[2]["timelines"]])
+        self.assertEqual(channels["Pluto TV Kultfilme"]["guide"][0]["title"], "Pluto TV Kultfilme")  # not in the fixture
+
+
+class Numbers(unittest.TestCase):
+    def setUp(self):
+        self.config = {"cache": tempfile.mkdtemp(prefix="rex-live-sports-")}
+        self.metas = {"ls-" + key: meta for key, _, meta in rex_live_sports.channels(rex_live_sports.DEFAULTS, CATALOG)}
+
+    def test_groups_cluster_in_the_order_of_their_names(self):
+        numbers = rex_live_sports.Sync(self.config).numbers(self.metas, NOW)
+        groups = sorted({meta["genre"] for meta in self.metas.values()})
+        for key, meta in self.metas.items():
+            self.assertEqual(numbers[key].split(".")[0], str(groups.index(meta["genre"]) + 100), key)
+        self.assertEqual(groups[0], "Live: 24/7 Streams")
+        self.assertEqual(numbers["ls-sky-sports-racing"], "100.1")
+        uk = sorted((meta["name"], numbers[key]) for key, meta in self.metas.items() if meta["genre"] == "Sports: UK")
+        self.assertEqual([number for _, number in uk], ["%d.%d" % (groups.index("Sports: UK") + 100, at) for at in range(1, len(uk) + 1)])
+
+    def test_a_channel_keeps_its_number(self):
+        numbers = rex_live_sports.Sync(self.config).numbers(self.metas, NOW)
+        # Restarted, listed in another order, a channel gone, another moved to another group.
+        metas = dict(reversed(list(self.metas.items())))
+        del metas["ls-sky-sports-racing"]
+        metas["ls-mutv-uk"] = dict(metas["ls-mutv-uk"], genre="Live: Football")
+        again = rex_live_sports.Sync(self.config).numbers(metas, NOW + 86400)
+        self.assertEqual(again, {key: numbers[key] for key in metas})
+        # A new channel takes the lowest number free in its group; one gone a week frees its own.
+        sync = rex_live_sports.Sync(self.config)
+        new = dict(metas, **{"ls-new": dict(self.metas["ls-sky-sports-racing"], name="Racing 2")})
+        self.assertEqual(sync.numbers(new, NOW + 86400)["ls-new"], "100.2")
+        sync.numbers(new, NOW + 8 * 86400)
+        self.assertEqual(sync.numbers(dict(new, **{"ls-new2": new["ls-new"]}), NOW + 8 * 86400)["ls-new2"], "100.1")
+
+    def test_weeks_it_does_not_run_do_not_count(self):
+        numbers = rex_live_sports.Sync(self.config).numbers(self.metas, NOW)
+        some = dict(list(self.metas.items())[::2])
+        self.assertEqual(rex_live_sports.Sync(self.config).numbers(some, NOW + 30 * 86400), {key: numbers[key] for key in some})
+
+    def test_a_new_group_takes_the_lowest_free_number(self):
+        sync = rex_live_sports.Sync(self.config)
+        sync.numbers(self.metas, NOW)
+        gone = {key: meta for key, meta in self.metas.items() if meta["genre"] != "Live: Afl"}
+        sync.numbers(gone, NOW + 8 * 86400)
+        event = {"ls-event": {"id": "lstv-x", "name": "A vs B", "genre": "Live: Darts"}}
+        self.assertEqual(sync.numbers(dict(gone, **event), NOW + 8 * 86400)["ls-event"], "101.1")  # Live: Afl's
+
+
+class Guides(unittest.TestCase):
+    def test_pluto_tv(self):
+        movies, red_bull, jump = ([rex_live_sports.pluto_programme(entry) for entry in channel["timelines"]] for channel in PLUTO_TV)
+        self.assertEqual(jump[1], {
+            "start": rex_live_sports.epoch("2026-11-01T10:31:21Z"), "end": rex_live_sports.epoch("2026-11-01T11:25:46Z"),
+            "title": "Veränderungen", "type": "episode", "show": "21 Jump Street", "season": 2, "episode": 22,
+            "summary": "In den Sommerferien pausiert das Jump Street-Programm. Ist das schon das Ende für das Projekt?",
+            "categories": ["Action & Adventure", "Crime Action"], "thumb": jump[1]["thumb"], "previously_shown": True})
+        self.assertTrue(jump[1]["thumb"].startswith("https://images.pluto.tv/episodes/"))
+        # Pluto TV's own filler between programmes, with no information.
+        self.assertEqual({key for key in jump[0] if key not in ("start", "end", "thumb")}, {"title", "previously_shown"})
+        self.assertEqual(movies[1]["title"], "Der schwarze Hengst")
+        self.assertNotIn("type", movies[1])  # a film
+        self.assertEqual(red_bull[0]["title"], "Red Bull Soapbox Race")
+        self.assertEqual(red_bull[0]["categories"], ["Sports"])
+        self.assertNotIn("previously_shown", red_bull[0])  # live
+
+    def test_xmltv(self):
+        names, programmes = rex_live_sports.xmltv(gzip.GzipFile(fileobj=io.BytesIO(EPGSHARE01_UK)), "UK",
+                                                  {"skyhistoryhd", "mutv", "nothing"}, NOW - 3 * 3600, NOW + 6 * 3600)
+        self.assertEqual(names, {"skyhistoryhd": [("UK", "Sky.HistoryHD.uk")], "mutv": [("UK", "MUTV.HD.uk")]})
+        history = programmes["Sky.HistoryHD.uk"]
+        self.assertTrue(all(programme["end"] > NOW - 3 * 3600 and programme["start"] < NOW + 6 * 3600 for programme in history))
+        self.assertEqual(len(history), 10)
+        episodes = [programme for programme in history if programme.get("type") == "episode"]
+        self.assertTrue(episodes)
+        for programme in episodes:
+            self.assertGreaterEqual(programme["season"], 1)  # xmltv_ns counts from 0
+            self.assertGreaterEqual(programme["episode"], 1)
+            self.assertNotEqual(programme["show"], programme["title"])
+
+    def test_matched_by_name_and_country(self):
+        index = rex_live_sports.logo_index(IPTV_ORG["channels"], IPTV_ORG["logos"], IPTV_ORG["countries"])
+        sync = rex_live_sports.Sync({"cache": tempfile.mkdtemp(prefix="rex-live-sports-")})
+        sync.logos, sync.logos_at = index, time.time()
+        guides = {"names": {"tntsports1": [("UK", "TNT.Sports.1.HD.uk")], "maxsport2": [("BG", "MAX.Sport.2.bg")]},
+                  "programmes": {"TNT.Sports.1.HD.uk": [{"start": 1, "end": 2, "title": "UEFA"}],
+                                 "MAX.Sport.2.bg": [{"start": 1, "end": 2, "title": "Bulgarian"}]}}
+        def guide(name, genre="Sports"):
+            return sync.guide(guides, {"id": "lstv-x", "name": name, "genre": genre}, NOW)[0]["title"]
+        self.assertEqual(guide("TNT Sports 1 (UK)"), "UEFA")
+        self.assertEqual(guide("TNT Sports 1 UK"), "UEFA")
+        self.assertEqual(guide("TNT SPORTS 1 .b", "Sports: UK"), "UEFA")
+        self.assertEqual(guide("TNT Sports 1"), "UEFA")  # iptv-org's TNT Sports 1 is the UK's
+        # Another country's channel of the name is not this one; with no country, the only one is.
+        self.assertEqual(guide("TNT Sports 1 (Argentina)"), "TNT Sports 1 (Argentina)")
+        self.assertEqual(guide("Max Sport 2 (Croatia)"), "Max Sport 2 (Croatia)")
+        self.assertEqual(guide("Max Sport 2"), "Bulgarian")
+
+    def test_placeholder(self):
+        guide = rex_live_sports.placeholder({"name": "Real Madrid vs Barcelona - NO Delay", "genre": "Live: Football"}, NOW + 60)
+        self.assertEqual([programme["start"] for programme in guide], [NOW - 6 * 3600 + 6 * 3600 * at for at in range(6)])
+        self.assertEqual({programme["end"] - programme["start"] for programme in guide}, {6 * 3600})
+        self.assertGreaterEqual(guide[-1]["end"], NOW + 24 * 3600)
+        self.assertEqual(guide[0]["title"], "Real Madrid vs Barcelona - NO Delay")
+        self.assertEqual(guide[0]["categories"], ["Sports", "Football"])
+        self.assertNotIn("categories", rex_live_sports.placeholder({"name": "Arte", "genre": "TV: Germany"}, NOW)[0])
+
 
 class Relay(unittest.TestCase):
     def test_redirects_to_live_sports(self):
@@ -446,6 +631,16 @@ class AgainstRex(unittest.TestCase):
         self.assertTrue(racing.get("art"))
         collections = self.get("/library/sections/%s/collections" % section["key"])["MediaContainer"].get("Metadata") or []
         self.assertIn("Live: Football", {row["title"] for row in collections})
+        # And Live TV: one DVR whose lineup is every channel by its number, each with its guide
+        # (the fixture's guides are of another day, so these are the channels' names).
+        self.assertEqual(len(self.get("/livetv/dvrs")["MediaContainer"]["Dvr"]), 1)
+        lineup = self.get("/tv.plex.providers.epg.xmltv:2/lineups/dvr/channels")["MediaContainer"]["Channel"]
+        self.assertEqual(len(lineup), len(rows))
+        channel = next(channel for channel in lineup if channel["title"] == "Sky Sports Racing")
+        self.assertEqual(channel["vcn"], "100.1")
+        grid = self.get("/tv.plex.providers.epg.xmltv:2/grid?channelGridKey=%s&date=%s"
+                        % (channel["gridKey"], time.strftime("%Y-%m-%d", time.gmtime())))["MediaContainer"]
+        self.assertEqual({row["title"] for row in grid["Metadata"]}, {"Sky Sports Racing"})
         # Restarted beside a live-sports still checking its channels: rex keeps what it holds.
         catalog["metas"][:] = catalog["metas"][:2]
         rex_live_sports.Sync(sync.config).once()
