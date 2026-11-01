@@ -110,7 +110,8 @@ Edit `config.json` and restart:
 
 ## Live TV
 
-rex shows the channels in **Live TV** in Plex Web and Plex for Android as well, as a tuner with a guide would.
+rex shows the channels in **Live TV** in Plex Web and Plex for Android as well, as a tuner with a guide would. [Live TV with rex](https://notes.debridmediamanager.com/rex/live-tv/) walks
+through the setup.
 The library stays as it is. It needs a rex nightly dated 2026.11.02 or newer; an older rex ignores it.
 
 - **Numbers.** A channel's number is its group's and its own: `100.1`, `100.2`, then `101.1` for
