@@ -204,7 +204,10 @@ class Sync:
     def register(self):
         answer = self.rex("PUT", "/rex/sources/" + self.config["source"], {
             "url": self.config["relay_url"], "mount": self.config["mount"],
-            "directories": [{"name": self.config["directory"], "movies": self.config["library"]}]})
+            "directories": [{"name": self.config["directory"], "movies": self.config["library"]}],
+            # A channel that ends never comes back as the same file: rex deletes what a snapshot
+            # leaves out instead of trashing it (2,115 trashed channels on rex-fun, 2026-11-01).
+            "trash": False})
         for ignored in answer.get("ignored") or []:
             LOG.warning("rex ignored %s: %s", ignored.get("entry"), ignored.get("reason"))
 
@@ -389,8 +392,16 @@ class Sync:
         with ThreadPoolExecutor(8) as pool:
             probes = list(pool.map(lambda row: self.probe(row[1]), listed))
             art = list(pool.map(lambda row, probe: self.artwork(row[0], row[2]) if probe else None, listed, probes))
-        items = [item(self.config, key, meta, probe, pictures)
-                 for (key, _, meta), probe, pictures in zip(listed, probes, art) if probe]
+        # One row a channel name, its first copy that plays: live-sports lists several copies
+        # under one name at once, each was a row of its own, and rex-fun's Live Sports showed
+        # ESPN+ USA 21 times (2026-11-01). Names are compared whole: different channels can share
+        # a key's spelling (`espn-usa`), and keep their `-2`.
+        items, named = [], set()
+        for (key, _, meta), probe, pictures in zip(listed, probes, art):
+            name = str(meta.get("name") or key).strip().lower()
+            if probe and name not in named:
+                named.add(name)
+                items.append(item(self.config, key, meta, probe, pictures))
         if not items:
             return
         try:

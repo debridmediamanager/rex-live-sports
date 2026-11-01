@@ -198,14 +198,20 @@ class SyncOnce(unittest.TestCase):
         path, registered = self.calls[0]
         self.assertEqual(path, "/rex/sources/live-sports")
         self.assertEqual(registered["directories"], [{"name": "live-sports", "movies": "Live Sports"}])
+        self.assertIs(registered["trash"], False)
         self.assertEqual(registered["url"], "http://127.0.0.1:9983")
         parts = self.snapshots()
         self.assertEqual([part["part"] for part in parts], [0, 1, 2, 3])
         self.assertEqual([part["complete"] for part in parts], [False, False, False, True])
         pushed = {item["id"]: item for part in parts for item in part["items"]}
-        self.assertEqual(len(pushed), 623)
+        # 624 play; five names are listed twice and both copies play, and NFL Network's other
+        # copy (dl-405) plays where dm-nfl-network is refused: one row a name.
+        self.assertEqual(len(pushed), 619)
+        names = [item["name"].strip().lower() for item in pushed.values()]
+        self.assertEqual(len(names), len(set(names)), [n for n in set(names) if names.count(n) > 1])
         refused = next(key for key, channel in self.sync.routes.items() if channel == "dm-nfl-network")
         self.assertNotIn("ls-" + refused, pushed)
+        self.assertIn("NFL Network", [item["name"] for item in pushed.values()])
         self.assertNotIn("force", parts[-1])  # nothing in rex to remove
         self.assertEqual(len([name for name in os.listdir(self.config["cache"]) if name.endswith(".json")]), 624)  # + iptv-org's
         self.assertEqual(self.sync.routes["sky-sports-racing"], "dm-sky-sports-racing")
@@ -265,7 +271,7 @@ class SyncOnce(unittest.TestCase):
         self.addCleanup(os.environ.pop, "FAKE_FFPROBE_FAIL")
         self.calls.clear()
         self.sync.once()
-        self.assertEqual(sum(len(part["items"]) for part in self.snapshots()), 624)
+        self.assertEqual(sum(len(part["items"]) for part in self.snapshots()), 619)
 
     def test_a_placeholder_is_probed_again(self):
         os.environ["FAKE_FFPROBE_SLATE"] = "dm-nfl-network"
@@ -273,11 +279,12 @@ class SyncOnce(unittest.TestCase):
         self.sync.once()
         path = os.path.join(self.config["cache"], "dm-nfl-network.json")
         self.assertFalse(os.path.exists(path))  # not pushed, not kept
-        self.assertEqual(sum(len(part["items"]) for part in self.snapshots()), 623)
+        self.assertEqual(sum(len(part["items"]) for part in self.snapshots()), 619)  # NFL Network by dl-405
         os.environ.pop("FAKE_FFPROBE_SLATE")
         self.calls.clear()
         self.sync.once()
-        self.assertEqual(sum(len(part["items"]) for part in self.snapshots()), 624)
+        self.assertEqual(sum(len(part["items"]) for part in self.snapshots()), 619)
+        self.assertTrue(os.path.exists(path))  # probed again, and kept
 
     def test_a_kept_placeholder_is_probed_again(self):
         # Probes kept before placeholders were refused stay a day otherwise.
