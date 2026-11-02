@@ -28,6 +28,10 @@ is recorded: when someone presses play, rex reads the channel from live-sports a
 |---|---|---|
 | ![Collections: Live: Football, Live: Cricket, Live: Racing and others](docs/plex-collections.webp) | ![Sky Sports Racing: 1080p H.264, AAC stereo](docs/plex-details.webp) | ![Sky Sports Racing playing live in Plex Web](docs/plex-playing.webp) |
 
+| The US lineup in Plex for Android's guide | The slots: the night's NBA and NHL games |
+|---|---|
+| ![Plex for Android's Live TV guide: ABC 1, ESPN 2 with Monday Night Countdown, ESPN2 3, ESPNU 4 with college basketball, CBS 7 and more, at their fixed numbers](docs/android-guide.webp) | ![The slot channels NBA 1, NBA 2, NHL 1 and others: Oklahoma City Thunder at Cleveland Cavaliers on NBA 1, Vegas Golden Knights at Boston Bruins on NHL 1, the next game on NBA 2 at 1:30](docs/android-slots.webp) |
+
 It is one Python file (standard library only) that runs beside rex and talks to it through rex's
 feed API, as every rex source does.
 
