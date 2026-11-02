@@ -464,9 +464,9 @@ def categories_of(group):
 
 
 def placeholder(meta, now):
-    """A guide for a channel no guide lists, and for a single match: its name, in blocks of
-    PLACEHOLDER_HOURS (UTC) from the block before now to a day after the next, so that every
-    channel has a row in Plex's guide. They change only when a block passes."""
+    """A guide for a channel no guide lists, for a single match and around a slot's games: its
+    name, in blocks of PLACEHOLDER_HOURS (UTC) from the block before now to a day after the next,
+    so that every channel has a row in Plex's guide. They change only when a block passes."""
     block = PLACEHOLDER_HOURS * 3600
     first = int(now) - int(now) % block - block
     categories = categories_of(str(meta.get("genre") or ""))
@@ -754,7 +754,8 @@ class Sync:
                 games = meta.get("games") or []
                 channel = {"number": numbers[entry["id"]], "title": name,
                            "call_sign": re.sub(r"\s*\([^)]*\)", "", name).strip() or name,
-                           "guide": games if meta.get("slot") else around(self.guide(guides, meta, now), games)}
+                           # A slot's gaps too: Plex for Android runs an airing to the next one (fun, 2026-11-02).
+                           "guide": around(placeholder(meta, now) if meta.get("slot") else self.guide(guides, meta, now), games)}
             sent[entry["id"]] = json.dumps(channel, sort_keys=True)
             if self.pushed.get(entry["id"]) != sent[entry["id"]]:
                 entry["channel"] = channel

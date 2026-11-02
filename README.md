@@ -162,8 +162,9 @@ lineup is found.
   its group: one whose name has both teams (`Kansas City Chiefs vs Denver Broncos`, `Denver
   Broncos vs Kansas City Chiefs (LOW SERVER)`), the sharpest picture first, then the shortest name.
   An F1 slot plays a channel with F1 in its name.
-- **Between games** a slot does not play, and stays as it was at its last game. A slot shows up
-  the first time it plays a game.
+- **Between games** a slot does not play, and stays as it was at its last game; its guide shows
+  its name there, as a channel with no guide does. A slot shows up the first time it plays a
+  game.
 - **Your own lineup** is a JSON list like the ones in `lineups/`: `{"number": "2", "name":
   "ESPN", "key": "espn/united states", "espn": ["ESPN"]}`. `key` is live-sports' key of the
   channel (in its catalog: the name in lower-case letters and digits, `/`, its country), or a

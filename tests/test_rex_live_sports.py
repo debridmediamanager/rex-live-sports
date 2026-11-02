@@ -758,6 +758,20 @@ class Lineup(unittest.TestCase):
             ["Tennessee Titans at Cincinnati Bengals", "Kansas City Chiefs at Denver Broncos"],
             ["Arizona Cardinals at Dallas Cowboys", "New England Patriots at Miami Dolphins"]))
 
+    def test_a_slots_guide_has_no_gaps(self):
+        # Plex for Android runs an airing to the next one: a slot's game was `19h 35m left` (Pixel
+        # 6, fun, 2026-11-02). Its name fills the gaps, in the blocks a channel with no guide has.
+        self.sync.once()
+        guide = self.pushed()["ls-slot-nfl-1"]["channel"]["guide"]
+        blocks = rex_live_sports.placeholder({"name": "NFL 1"}, ESPN_NOW)
+        within = [programme for programme in guide if programme["start"] < blocks[-1]["end"]]
+        self.assertEqual((within[0]["start"], within[-1]["end"]), (blocks[0]["start"], blocks[-1]["end"]))
+        self.assertTrue(all(before["end"] == after["start"] for before, after in zip(within, within[1:])), within)
+        kickoff = rex_live_sports.epoch("2026-11-01T21:25Z")
+        self.assertEqual([(programme["title"], programme["start"], programme["end"]) for programme in within[2:5]], [
+            ("NFL 1", kickoff - 600, kickoff), ("Kansas City Chiefs at Denver Broncos", kickoff, kickoff + 195 * 60),
+            ("NFL 1", kickoff + 195 * 60, rex_live_sports.epoch("2026-11-02T01:20Z"))])
+
     def test_slots(self):
         # The shortest name of a game's channel, `Chiefs vs Broncos`, with a smaller picture.
         meta = next(meta for meta in self.catalog["metas"] if meta["name"] == "Kansas City Chiefs vs Denver Broncos")
@@ -772,7 +786,7 @@ class Lineup(unittest.TestCase):
             "ls-slot-nfl-1": ("NFL 1", "700.1", ["NFL"]), "ls-slot-nfl-2": ("NFL 2", "700.2", ["NFL"]),
             "ls-slot-nfl-9": ("NFL 9", "700.9", ["NFL"]), "ls-slot-nba-2": ("NBA 2", "701.2", ["NBA"])})
         # A slot's guide is its games, in the first slot free at their kickoff.
-        self.assertEqual([programme["title"] for programme in slots["ls-slot-nfl-1"]["channel"]["guide"]],
+        self.assertEqual([programme["title"] for programme in slots["ls-slot-nfl-1"]["channel"]["guide"] if programme["title"] != "NFL 1"],
                          ["Baltimore Ravens at Buffalo Bills", "Kansas City Chiefs at Denver Broncos",
                           "Philadelphia Eagles at Washington Commanders", "Chicago Bears at Seattle Seahawks"])
         # Each plays the channel of its game: of `Chiefs vs Broncos`, `Kansas City Chiefs vs
