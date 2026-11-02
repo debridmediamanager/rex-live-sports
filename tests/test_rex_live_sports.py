@@ -1,16 +1,21 @@
 """rex-live-sports against a real live-sports catalog (zen, 2026-10-26), a real channel's probe
 and iptv-org's real channel and logo lists, cut to the names in that catalog; and real guides
 (2026-11-01): Pluto TV's schedule of three of its channels, epgshare01's listing and its UK
-guide, cut to four channels from 08:00 to 20:00 UTC.
+guide, cut to four channels from 08:00 to 20:00 UTC. For lineups: live-sports' catalog with its
+keys (zen, 2026-11-01 23:48 UTC), cut to the default lineups' channels and its `Live:` groups, and
+ESPN's scoreboards of Sunday and Monday as they were at 23:37 UTC, Chiefs at Broncos in its fourth
+quarter (the NBA's Monday cut to three games).
 
 `AgainstRex` also syncs into a real rex binary: REX_BIN.
 
     REX_BIN=/path/to/rex python3 -m unittest discover -s tests
 """
+import copy
 import gzip
 import io
 import json
 import os
+import re
 import socket
 import subprocess
 import sys
@@ -24,7 +29,8 @@ import urllib.request
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-sys.path.insert(0, os.path.dirname(HERE))
+ROOT = os.path.dirname(HERE)
+sys.path.insert(0, ROOT)
 import rex_live_sports  # noqa: E402
 
 with open(os.path.join(HERE, "fixtures", "catalog.json")) as _handle:
@@ -41,7 +47,15 @@ with open(os.path.join(HERE, "fixtures", "epgshare01.html"), "rb") as _handle:
     EPGSHARE01 = _handle.read()
 with open(os.path.join(HERE, "fixtures", "epgshare01-UK1.xml.gz"), "rb") as _handle:
     EPGSHARE01_UK = _handle.read()
+with open(os.path.join(HERE, "fixtures", "catalog-keyed.json")) as _handle:
+    CATALOG_KEYED = json.load(_handle)
+ESPN = {}
+for _short, _league in (("nfl", "football/nfl"), ("nba", "basketball/nba"), ("eng.1", "soccer/eng.1"), ("f1", "racing/f1")):
+    with open(os.path.join(HERE, "fixtures", "espn-%s.json" % _short)) as _handle:
+        ESPN[_league] = json.load(_handle)  # {day: scoreboard}
 NOW = rex_live_sports.epoch("2026-11-01T12:00:00Z")  # when the guides were fetched
+ESPN_NOW = rex_live_sports.epoch("2026-11-01T23:37:00Z")  # when the scoreboards were
+US = os.path.join(ROOT, "lineups", "us.json")
 PNG = b"\x89PNG\r\n\x1a\n"
 
 
@@ -94,7 +108,9 @@ def serve(routes, calls):
                 held.update(session)
             self.answer(200, {"created": 1})
 
-    server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+    class Server(ThreadingHTTPServer):
+        request_queue_size = 64  # ESPN's scoreboards are asked eight at a time
+    server = Server(("127.0.0.1", 0), Handler)
     threading.Thread(target=server.serve_forever, daemon=True).start()
     return server, "http://127.0.0.1:%d" % server.server_address[1]
 
@@ -110,7 +126,8 @@ def config(work, base, **extra):
 def offline(test, base, refused=()):
     """iptv-org's lists and the guides from the fixtures, served at `base`, and logos fetched from
     nowhere: a PNG naming its url, or a 404 for a url in `refused`."""
-    for name, url in (("IPTV_ORG", base + "/iptv-org"), ("EPGSHARE01", base + "/epgshare01/"), ("PLUTO_TV", base + "/pluto")):
+    for name, url in (("IPTV_ORG", base + "/iptv-org"), ("EPGSHARE01", base + "/epgshare01/"), ("PLUTO_TV", base + "/pluto"),
+                      ("ESPN", base + "/espn/")):
         test.addCleanup(setattr, rex_live_sports, name, getattr(rex_live_sports, name))
         setattr(rex_live_sports, name, url)
 
@@ -127,6 +144,11 @@ def iptv_routes():
     """iptv-org's lists and the guides; epgshare01's other files are not found."""
     return dict({"/iptv-org/%s.json" % name: IPTV_ORG[name] for name in ("channels", "logos", "countries")},
                 **{"/epgshare01/": EPGSHARE01, "/epgshare01/epg_ripper_UK1.xml.gz": EPGSHARE01_UK, "/pluto": PLUTO_TV})
+
+
+def espn_routes():
+    """ESPN's scoreboards; its other leagues and days are not found."""
+    return {"/espn/%s/scoreboard?dates=%s" % (league, day): answer for league, days in ESPN.items() for day, answer in days.items()}
 
 
 class Channels(unittest.TestCase):
@@ -558,7 +580,8 @@ class Relay(unittest.TestCase):
         with open(os.path.join(work, "art", "sky-sports-racing-0a1b2c3d-poster.png"), "wb") as handle:
             handle.write(PNG)
         cfg = dict(rex_live_sports.DEFAULTS, live_sports_url="http://zen:8765", cache=work)
-        server = ThreadingHTTPServer(("127.0.0.1", 0), rex_live_sports.handler(cfg, {"sky-sports-racing": "dm-sky-sports-racing"}))
+        routes = {"sky-sports-racing": "dm-sky-sports-racing", "slot-nfl-5": None}
+        server = ThreadingHTTPServer(("127.0.0.1", 0), rex_live_sports.handler(cfg, routes))
         threading.Thread(target=server.serve_forever, daemon=True).start()
         self.addCleanup(server.server_close)
         self.addCleanup(server.shutdown)
@@ -579,6 +602,159 @@ class Relay(unittest.TestCase):
             with self.assertRaises(urllib.error.HTTPError) as caught:
                 opener.open(base + path)
             self.assertEqual(caught.exception.code, 404, path)
+        # A slot with no game on.
+        with self.assertRaises(urllib.error.HTTPError) as caught:
+            opener.open(base + "/live-sports/slot-nfl-5.m3u8")
+        self.assertEqual(caught.exception.code, 503)
+
+
+class Lineup(unittest.TestCase):
+    def setUp(self):
+        self.work = tempfile.mkdtemp(prefix="rex-live-sports-")
+        self.calls = []
+        self.catalog = {"metas": CATALOG_KEYED["metas"][:]}
+        self.routes = dict(iptv_routes(), **espn_routes(), **{"/catalog/tv/all.json": self.catalog})
+        self.server, self.base = serve(self.routes, self.calls)
+        self.addCleanup(self.server.server_close)
+        self.addCleanup(self.server.shutdown)
+        offline(self, self.base)
+        self.sync = self.lineup()
+
+    def lineup(self, **extra):
+        sync = rex_live_sports.Sync(config(self.work, self.base, lineup=US, **extra))
+        sync.now = lambda: ESPN_NOW
+        return sync
+
+    def pushed(self):
+        return {item["id"]: item for path, body in self.calls if path == "/rex/feed/live-sports/snapshot" for item in body["items"]}
+
+    def test_a_lineup_is_its_channels_at_their_numbers(self):
+        self.sync.once()
+        pushed = self.pushed()
+        with open(US) as handle:
+            lineup = {"ls-" + rex_live_sports.slug(entry["key"]): entry for entry in json.load(handle)}
+        listed = {meta["key"] for meta in self.catalog["metas"]}
+        # The 26 of its 30 channels live-sports lists now, and nothing else of live-sports': the
+        # games are in their slots.
+        channels = {key: item for key, item in pushed.items() if not key.startswith("ls-slot-")}
+        self.assertEqual(set(channels), {key for key, entry in lineup.items() if entry["key"] in listed})
+        self.assertEqual(len(channels), 26)
+        self.assertEqual({key: item["channel"]["number"] for key, item in channels.items()},
+                         {key: lineup[key]["number"] for key in channels})
+        self.assertEqual({key: item["name"] for key, item in channels.items()}, {key: lineup[key]["name"] for key in channels})
+        espn = channels["ls-espn-united-states"]
+        self.assertEqual({key: espn["channel"][key] for key in ("number", "title", "call_sign")}, {"number": "2", "title": "ESPN", "call_sign": "ESPN"})
+        self.assertEqual(espn["collections"], ["Sports: USA"])  # its group's, as every channel's
+        self.assertEqual(self.sync.routes["espn-united-states"], "cv-3585682")  # `ESPN (USA)`
+        # Another copy, by another name: the same channel, played from it.
+        self.catalog["metas"][:] = [dict(meta, id=meta["id"] + "-copy", name="ESPN USA HD") if meta["key"] == "espn/united states" else meta
+                                    for meta in CATALOG_KEYED["metas"]]
+        self.calls.clear()
+        self.sync.once()
+        self.assertEqual(self.pushed()["ls-espn-united-states"]["name"], "ESPN")
+        self.assertEqual(self.sync.routes["espn-united-states"], "cv-3585682-copy")
+
+    def test_the_rest_of_live_sports_when_asked(self):
+        sync = self.lineup(lineup_only=False)
+        sync.once()
+        numbers = {item["name"]: item["channel"]["number"] for item in self.pushed().values()}
+        self.assertEqual((numbers["ESPN"], numbers["NFL Network"], numbers["NFL 2"]), ("2", "15", "700.2"))
+        # The single games too, numbered as before, by group from 100.
+        self.assertRegex(numbers["Kansas City Chiefs vs Denver Broncos"], r"^1\d\d\.\d+$")
+        with open(US) as handle:
+            fixed = {entry["name"] for entry in json.load(handle)}
+        rest = [number for name, number in numbers.items() if name not in fixed and not number.startswith("70")]
+        self.assertGreater(len(rest), 140)
+        self.assertTrue(all(re.fullmatch(r"1\d\d\.\d+", number) for number in rest), rest)
+
+    def test_espn_games(self):
+        games = rex_live_sports.espn_games("football/nfl", "20261101", ESPN["football/nfl"]["20261101"])
+        self.assertEqual(len(games), 12)
+        game = next(game for game in games if game["programme"]["title"] == "Kansas City Chiefs at Denver Broncos")
+        kickoff = rex_live_sports.epoch("2026-11-01T21:25Z")
+        self.assertEqual(game["programme"], {
+            "start": kickoff, "end": kickoff + 195 * 60, "title": "Kansas City Chiefs at Denver Broncos",
+            "summary": "NFL, Week 8", "categories": ["Sports", "Football", "NFL"],
+            "thumb": "https://a.espncdn.com/i/teamlogos/nfl/500/scoreboard/den.png"})  # the home side's
+        self.assertEqual((game["state"], game["teams"], game["networks"]), ("in", [["Broncos"], ["Chiefs"]], {"cbs"}))
+        # A club by its name or its last word; a race weekend's sessions, each a programme of its own.
+        (epl,) = rex_live_sports.espn_games("soccer/eng.1", "20261102", ESPN["soccer/eng.1"]["20261102"])
+        self.assertEqual((epl["programme"]["title"], epl["programme"]["summary"], epl["programme"]["end"] - epl["programme"]["start"]),
+                         ("Everton at Newcastle United", "Premier League", 7200))
+        self.assertEqual(epl["teams"], [["Newcastle United", "United"], ["Everton", "Everton"]])
+        f1 = rex_live_sports.espn_games("racing/f1", "20261101", ESPN["racing/f1"]["20261101"])
+        self.assertEqual([game["programme"]["title"] for game in f1], ["Mexico City Grand Prix " + kind for kind in ("FP1", "FP2", "FP3", "Qual", "Race")])
+        self.assertEqual({(game["sport"], game["state"], str(game["teams"])) for game in f1}, {("F1", "post", "[['F1']]")})
+        # ESPN lists the regional games of one network at once: one at a time on its channel.
+        cbs = rex_live_sports.one_at_a_time([game["programme"] for game in games if "cbs" in game["networks"]])
+        self.assertEqual([programme["title"] for programme in cbs], ["Indianapolis Colts at Jacksonville Jaguars", "New England Patriots at Miami Dolphins"])
+
+    def test_espns_schedule_on_a_lineup_channel(self):
+        self.sync.now = lambda: rex_live_sports.epoch("2026-11-02T20:00:00Z")
+        self.sync.once()
+        channels = {item["name"]: item["channel"] for item in self.pushed().values()}
+        kickoff = rex_live_sports.epoch("2026-11-03T01:15Z")
+        # Monday night's game on ESPN, in its name's blocks, which are cut where it is on.
+        guide = [(programme["title"], programme["start"], programme["end"]) for programme in channels["ESPN"]["guide"]]
+        self.assertEqual(guide[2:5], [("ESPN", kickoff - 4500, kickoff), ("Chicago Bears at Seattle Seahawks", kickoff, kickoff + 195 * 60),
+                                      ("ESPN", kickoff + 195 * 60, kickoff + 17100)])
+        self.assertTrue(all(before[2] <= after[1] for before, after in zip(guide, guide[1:])), guide)
+        self.assertEqual(channels["ESPN"]["guide"][3]["categories"], ["Sports", "Football", "NFL"])
+        # A channel with no game on it has its guide as before.
+        self.assertEqual({programme["title"] for programme in channels["NFL Network"]["guide"]}, {"NFL Network"})
+
+    def test_slots(self):
+        # The shortest name of a game's channel, `Chiefs vs Broncos`, with a smaller picture.
+        meta = next(meta for meta in self.catalog["metas"] if meta["name"] == "Kansas City Chiefs vs Denver Broncos")
+        self.catalog["metas"].append(dict(meta, id="lstv-test-chiefs-broncos", name="Chiefs vs Broncos", key="chiefsvsbroncos/"))
+        smaller = dict(PROBE, streams=[dict(stream, height=720) if stream["codec_type"] == "video" else stream for stream in PROBE["streams"]])
+        probe = self.sync.probe
+        self.sync.probe = lambda channel: smaller if channel == "test-chiefs-broncos" else probe(channel)
+        self.sync.once()
+        slots = {key: item for key, item in self.pushed().items() if key.startswith("ls-slot-")}
+        # Only the slots with a game on now: the others wait for their first.
+        self.assertEqual({key: (item["name"], item["channel"]["number"], item["collections"]) for key, item in slots.items()}, {
+            "ls-slot-nfl-1": ("NFL 1", "700.1", ["NFL"]), "ls-slot-nfl-2": ("NFL 2", "700.2", ["NFL"]),
+            "ls-slot-nfl-3": ("NFL 3", "700.3", ["NFL"]), "ls-slot-nba-2": ("NBA 2", "701.2", ["NBA"])})
+        # Sunday's twelve games by kickoff, dealt to the eight slots in turn; Monday's start again.
+        guide = slots["ls-slot-nfl-1"]["channel"]["guide"]
+        self.assertEqual([programme["title"] for programme in guide],
+                         ["Baltimore Ravens at Buffalo Bills", "Los Angeles Chargers at Los Angeles Rams", "Chicago Bears at Seattle Seahawks"])
+        self.assertEqual(guide[0]["end"], guide[1]["start"])  # one game at a time
+        self.assertEqual([programme["title"] for programme in slots["ls-slot-nfl-2"]["channel"]["guide"]],
+                         ["Tennessee Titans at Cincinnati Bengals", "Kansas City Chiefs at Denver Broncos"])
+        # Each plays the channel of its game: of `Chiefs vs Broncos`, `Kansas City Chiefs vs
+        # Denver Broncos` and `Denver Broncos vs Kansas City Chiefs (LOW SERVER)`, the one of the
+        # taller picture, then of the shorter name, with its probe.
+        self.assertEqual(self.sync.routes["slot-nfl-2"], "rx-nfl-streams-10")
+        self.assertEqual(self.sync.routes["slot-nfl-1"], "sf-los-angeles-chargers-vs-los-angeles-rams")
+        self.assertEqual(self.sync.routes["slot-nfl-3"], "rx-nfl-streams-11")
+        self.assertIn(self.sync.routes["slot-nba-2"], {"sf-brooklyn-nets-vs-indiana-pacers", "fw-SW5kaWFuYSBQYWNlcnMgdnMgQnJvb2tseW4gTmV0cy5odG1s",
+                                                        "el-01a19947-05c5-74ba-a8c9-aeb8c30209a3"})
+        with open(os.path.join(self.sync.config["cache"], "rx-nfl-streams-10.json")) as handle:
+            self.assertEqual(slots["ls-slot-nfl-2"]["media_info"], json.load(handle))
+        self.assertIsNone(self.sync.routes["slot-nfl-4"])  # Sunday night's game is later
+        # The game ends: the slot stays, with its game's probe, and its relay answers 503.
+        day = copy.deepcopy(ESPN["football/nfl"]["20261101"])
+        game = next(event for event in day["events"] if event["shortName"] == "KC @ DEN")
+        for status in (game["status"], game["competitions"][0]["status"]):
+            status["type"]["state"] = "post"
+        self.routes["/espn/football/nfl/scoreboard?dates=20261101"] = day
+        self.calls.clear()
+        self.sync.once()
+        self.assertIsNone(self.sync.routes["slot-nfl-2"])
+        self.assertEqual(self.pushed()["ls-slot-nfl-2"]["media_info"], slots["ls-slot-nfl-2"]["media_info"])
+        # A restart keeps it; ten minutes before Sunday night's kickoff NFL 4 has its first game.
+        sync = self.lineup()
+        self.calls.clear()
+        sync.once()
+        self.assertIn("ls-slot-nfl-2", self.pushed())
+        self.assertNotIn("ls-slot-nfl-4", self.pushed())
+        sync.now = lambda: rex_live_sports.epoch("2026-11-02T01:10:00Z")
+        self.calls.clear()
+        sync.once()
+        self.assertIn(sync.routes["slot-nfl-4"], {"rx-nfl-streams-12", "el-01a19947-f1bd-7188-99ed-7a873f72069e"})
+        self.assertEqual(self.pushed()["ls-slot-nfl-4"]["channel"]["number"], "700.4")
 
 
 @unittest.skipUnless(os.path.exists(os.environ.get("REX_BIN", "/nonexistent")), "REX_BIN names no rex binary")
@@ -591,7 +767,8 @@ class AgainstRex(unittest.TestCase):
         with urllib.request.urlopen(request, timeout=30) as response:
             return json.loads(response.read() or b"{}")
 
-    def test_channels_become_a_library_with_collections(self):
+    def start(self, catalog, **extra):
+        """A rex, and a sync into it with its relay, of `catalog`."""
         work = tempfile.mkdtemp(prefix="rex-live-sports-")
         self.port = free_port()
         env = dict(os.environ, REX_TRANSCODER="off", REX_DIRECT_URL="off", REX_PLEXTV_URL="http://127.0.0.1:9")
@@ -606,18 +783,30 @@ class AgainstRex(unittest.TestCase):
                 break
             except OSError:
                 time.sleep(0.1)
-        calls = []
-        catalog = {"metas": [meta for meta in CATALOG["metas"] if meta["genre"].startswith("Live:")]}
-        live, base = serve(dict(iptv_routes(), **{"/catalog/tv/all.json": catalog}), calls)
+        live, base = serve(dict(iptv_routes(), **espn_routes(), **{"/catalog/tv/all.json": catalog}), [])
         self.addCleanup(live.server_close)
         self.addCleanup(live.shutdown)
         offline(self, base)
         listen = "127.0.0.1:%d" % free_port()
-        sync = rex_live_sports.Sync(config(work, base, rex_url="http://127.0.0.1:%d" % self.port, listen=listen))
+        sync = rex_live_sports.Sync(config(work, base, rex_url="http://127.0.0.1:%d" % self.port, listen=listen, **extra))
         relay = ThreadingHTTPServer(("127.0.0.1", int(listen.rsplit(":", 1)[1])), rex_live_sports.handler(sync.config, sync.routes))
         threading.Thread(target=relay.serve_forever, daemon=True).start()
         self.addCleanup(relay.server_close)
         self.addCleanup(relay.shutdown)
+        return sync
+
+    def test_a_lineup_is_rexs_live_tv(self):
+        sync = self.start({"metas": CATALOG_KEYED["metas"][:]}, lineup=US)
+        sync.now = lambda: ESPN_NOW
+        sync.once()
+        self.assertEqual(sync.rejected, set())
+        lineup = {channel["vcn"]: channel["title"] for channel in self.get("/tv.plex.providers.epg.xmltv:2/lineups/dvr/channels")["MediaContainer"]["Channel"]}
+        self.assertEqual(len(lineup), 30)  # 26 networks, 4 slots
+        self.assertEqual((lineup["2"], lineup["15"], lineup["700.2"], lineup["701.2"]), ("ESPN", "NFL Network", "NFL 2", "NBA 2"))
+
+    def test_channels_become_a_library_with_collections(self):
+        catalog = {"metas": [meta for meta in CATALOG["metas"] if meta["genre"].startswith("Live:")]}
+        sync = self.start(catalog)
         sync.once()
         sections = self.get("/library/sections")["MediaContainer"]["Directory"]
         section = next(section for section in sections if section["title"] == "Live Sports")

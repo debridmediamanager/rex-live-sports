@@ -24,6 +24,10 @@ Each channel is also a channel of rex's Live TV (`live_tv`), with a number that 
 a guide: Pluto TV's own schedule for a Pluto TV channel, epgshare01's XMLTV for a channel it finds
 there by name and country, and the channel's name in blocks of six hours for the rest.
 
+With a lineup (`lineups/us.json`), Live TV is a short list of networks instead: the channels it
+names, at the numbers it gives them, with ESPN's schedule of the games on them, and slots that
+carry each game of a sport from before kickoff until it ends.
+
 Standard library only; ffprobe and ffmpeg are separate executables.
 """
 import argparse
@@ -69,6 +73,9 @@ DEFAULTS = {
     "interval_minutes": 5,
     "probe_hours": 24,
     "live_tv": True,
+    "lineup": "lineup.json",
+    "lineup_only": True,
+    "slots": {"NFL": 8, "NBA": 6, "NHL": 6, "MLB": 4, "Soccer": 8, "F1": 1},
 }
 
 CHANNEL = re.compile(r"[A-Za-z0-9_.-]+")
@@ -84,6 +91,16 @@ EPGSHARE01 = "https://epgshare01.online/epgshare01/"
 PLUTO_TV = "https://api.pluto.tv/v2/channels"
 GUIDE_HOURS = 12  # how often guides are fetched again
 PLACEHOLDER_HOURS = 6
+
+# ESPN's scoreboards, free and without a key: one day a request (a range answers 400, 2026-11-01).
+# Each league: its slots' sport, its category in the guide and how long a game is given there.
+ESPN = "https://site.api.espn.com/apis/site/v2/sports/"
+LEAGUES = dict({"football/nfl": ("NFL", "Football", 195), "football/college-football": ("College Football", "Football", 195),
+                "basketball/nba": ("NBA", "Basketball", 150), "hockey/nhl": ("NHL", "Hockey", 165),
+                "baseball/mlb": ("MLB", "Baseball", 180), "racing/f1": ("F1", "Motorsport", 120)},
+               **{"soccer/" + league: ("Soccer", "Soccer", 120) for league in
+                  ("eng.1", "ger.1", "esp.1", "ita.1", "fra.1", "uefa.champions", "uefa.europa", "usa.1")})
+SLOTS_FROM = 700  # the first sport's slots are 700.1, 700.2, ..., the next one's 701.1
 
 # live-sports' own poster colour, behind a channel's name and behind a logo drawn in light colours.
 DARK, LIGHT = "0x1a1a2e", "0xf2f2f2"
@@ -136,24 +153,46 @@ def load_config(path):
         config["cache"] = os.path.join(os.path.dirname(os.path.abspath(path)), config["cache"])
     config["relay_url"] = (config["relay_url"] or "http://" + config["listen"]).rstrip("/")
     config["live_sports_url"] = config["live_sports_url"].rstrip("/")
+    lineup = os.path.join(os.path.dirname(os.path.abspath(path)), config["lineup"] or "")
+    config["lineup"] = None
+    if os.path.isfile(lineup):
+        with open(lineup) as handle:
+            config["lineup"] = json.load(handle)
     return config
 
 
-def channels(config, catalog):
+def slug(text):
+    return re.sub(r"[^a-z0-9]+", "-", str(text).lower()).strip("-")
+
+
+def listed_metas(catalog):
+    return [meta for meta in catalog.get("metas") or [] if isinstance(meta, dict) and str(meta.get("id", "")).startswith("lstv-")
+            and CHANNEL.fullmatch(meta["id"][len("lstv-"):])]
+
+
+def channels(config, catalog, lineup=None):
     """The catalog's channels in the chosen groups, as (key, channel id, meta). live-sports lists
     only channels whose stream passed its last check, one copy of each channel it has several
     of, and which copy can change from one check to the next (measured while it starts). So rex
-    knows a channel by its name (`key`), and the relay plays whichever copy is listed now."""
+    knows a channel by its name (`key`), and the relay plays whichever copy is listed now.
+
+    A lineup's channel, found by live-sports' own key for a channel's copies (`espn/united
+    states`), is taken whatever its group, under that key, with the lineup's name and number;
+    with `lineup_only`, nothing else is."""
     out, keys = [], set()
-    for meta in catalog.get("metas") or []:
-        if not isinstance(meta, dict) or not str(meta.get("id", "")).startswith("lstv-"):
-            continue
+    named = {str(entry["key"]): entry for entry in lineup or []}
+    others = lineup is None or not config["lineup_only"]
+    # The lineup's channels first, so that no other channel takes their key.
+    for meta in sorted(listed_metas(catalog), key=lambda meta: str(meta.get("key")) not in named):
         channel, group = meta["id"][len("lstv-"):], str(meta.get("genre") or "")
-        if CHANNEL.fullmatch(channel) and group.startswith(tuple(config["groups"])):
-            key = re.sub(r"[^a-z0-9]+", "-", str(meta.get("name") or "").lower()).strip("-") or channel
+        entry = named.get(str(meta.get("key")))
+        if entry or others and group.startswith(tuple(config["groups"])):
+            key = slug(entry["key"] if entry else meta.get("name") or "") or channel
             while key in keys:
                 key += "-2"
             keys.add(key)
+            if entry:
+                meta = dict(meta, title=entry["name"], number=str(entry["number"]), espn=entry.get("espn") or [])
             out.append((key, channel, meta))
     return out
 
@@ -242,6 +281,81 @@ def epoch(text):
         offset = (int(zone[2]) * 3600 + int(zone[3]) * 60) * (1 if zone[1] == "+" else -1) if zone else 0
         return calendar.timegm(time.strptime(text[:14], "%Y%m%d%H%M%S")) - offset
     return int(datetime.datetime.fromisoformat(text.replace("Z", "+00:00")).timestamp())
+
+
+def espn_games(league, day, answer):
+    """A league's day of ESPN's scoreboard as games: each competition (an F1 weekend's sessions
+    are competitions of one event) as a guide programme, with its state, what a channel's name
+    calls each side (a nickname, `Chiefs`; a club by its name or its last word, `Newcastle United`
+    or `United`; an F1 session by `F1`) and the networks ESPN lists it on, in lower case."""
+    sport, category, minutes = LEAGUES[league]
+    name = str((answer.get("leagues") or [{}])[0].get("abbreviation") or sport)
+    def called(team):
+        whole = str(team.get("displayName") or "")
+        return [whole, whole.split()[-1]] if sport == "Soccer" and whole else [str(team.get("name") or whole)]
+    out = []
+    for event in answer.get("events") or []:
+        competitions = event.get("competitions") or []
+        for competition in competitions:
+            try:
+                start = epoch(competition.get("date") or event["date"])
+            except (KeyError, TypeError, ValueError):
+                continue
+            teams = sorted((side for side in competition.get("competitors") or [] if isinstance(side.get("team"), dict)),
+                           key=lambda side: side.get("homeAway") != "home")
+            kind = (competition.get("type") or {}).get("abbreviation") if len(competitions) > 1 else None
+            week = (event.get("week") or {}).get("number")
+            programme = {"start": start, "end": start + minutes * 60,
+                         "title": " ".join(str(part) for part in (event.get("name") or name, kind) if part),
+                         "summary": name + (", Week %s" % week if week else ""), "categories": ["Sports", category, name]}
+            logo = str(teams[0]["team"].get("logo") or "") if teams else ""
+            if logo.startswith("https://"):
+                programme["thumb"] = logo
+            out.append({"id": "%s/%s" % (event.get("id"), competition.get("id")), "day": day, "sport": sport,
+                        "programme": programme,
+                        "state": ((competition.get("status") or event.get("status") or {}).get("type") or {}).get("state"),
+                        "teams": [[part for part in called(side["team"]) if part] for side in teams] or [[sport]],
+                        "networks": {str(network).lower() for broadcast in competition.get("broadcasts") or []
+                                     for network in broadcast.get("names") or []}})
+    return out
+
+
+def on(game, now):
+    """A game is on from 15 minutes before kickoff until ESPN has it over."""
+    return game["state"] != "post" and now >= game["programme"]["start"] - 900
+
+
+def shows(meta, game):
+    """A channel of a game: its name calls both sides (`Chiefs vs Broncos`, `Denver Broncos vs
+    Kansas City Chiefs (LOW SERVER)`), each from the start of a word (the Nets, not the Hornets)."""
+    name = str(meta.get("name") or "")
+    return all(any(re.search(r"(?i)\b" + re.escape(part), name) for part in side) for side in game["teams"])
+
+
+def height(probe):
+    return max([stream.get("height") or 0 for stream in probe.get("streams") or [] if stream.get("codec_type") == "video"] or [0])
+
+
+def one_at_a_time(programmes):
+    """Programmes by their start, each cut at the next one's: a slot's games are dealt in turn,
+    and ESPN lists the regional games of one network (CBS's at 1 pm) at once."""
+    programmes = sorted(programmes, key=lambda programme: programme["start"])
+    cut = [dict(programme, end=min(programme["end"], after["start"])) for programme, after in zip(programmes, programmes[1:])]
+    return [programme for programme in cut + programmes[-1:] if programme["end"] > programme["start"]]
+
+
+def around(guide, games):
+    """A channel's guide with its games in it, what else it had at their times cut out."""
+    if not games:
+        return guide
+    out = list(games)
+    for programme in guide:
+        pieces = [(programme["start"], programme["end"])]
+        for game in games:
+            pieces = [(start, end) for low, high in pieces
+                      for start, end in ((low, min(high, game["start"])), (max(low, game["end"]), high)) if end > start]
+        out += [dict(programme, start=start, end=end) for start, end in pieces]
+    return sorted(out, key=lambda programme: programme["start"])
 
 
 def xmltv_programme(element):
@@ -334,7 +448,7 @@ def placeholder(meta, now):
     block = PLACEHOLDER_HOURS * 3600
     first = int(now) - int(now) % block - block
     categories = categories_of(str(meta.get("genre") or ""))
-    return [dict({"start": start, "end": start + block, "title": str(meta.get("name") or "")},
+    return [dict({"start": start, "end": start + block, "title": str(meta.get("title") or meta.get("name") or "")},
                  **({"categories": categories} if categories else {}))
             for start in range(first, first + 6 * block, block)]
 
@@ -353,12 +467,13 @@ def item(config, key, meta, probe, art=None):
     path = "%s/%s.m3u8" % (config["directory"], key)
     group = str(meta.get("genre") or "")
     art = art or {}
-    display = {"title": meta.get("name") or key, "summary": group, "thumb": art.get("poster"), "art": art.get("art")}
+    name = meta.get("title") or meta.get("name") or key
+    display = {"title": name, "summary": group, "thumb": art.get("poster"), "art": art.get("art")}
     return {
         "id": "ls-" + key,
         "path": path,
         "file": "%s/%s" % (config["mount"].rstrip("/"), path),
-        "name": meta.get("name") or key,
+        "name": name,
         "release": "live-sports:" + key,
         "media_info": probe,
         "display": {key: value for key, value in display.items() if value},
@@ -384,6 +499,8 @@ class Sync:
         self.routes = {}  # key -> the channel id the relay plays it from
         self.guides, self.guides_at, self.guides_for = None, 0, 0
         self.numbered = None
+        self.espn = {}  # (league, day) -> (when it was fetched, its games)
+        self.slotted = None  # slot key -> the probe of its last game
         self.pushed = {}  # item id -> its channel as last pushed, which rex keeps while an item has none
         self.now = time.time
 
@@ -493,7 +610,7 @@ class Sync:
         order of their names the first time they are numbered. A channel keeps its number while
         live-sports lists it at least once a week, wherever its group goes (a week this does not
         run does not count); after that its number is free again, and its group's once none of its
-        channels is left."""
+        channels is left. A lineup's channel and a slot have the number they are given."""
         path = os.path.join(self.config["cache"], "channels.json")
         if self.numbered is None:
             try:
@@ -502,6 +619,7 @@ class Sync:
             except (OSError, ValueError):
                 self.numbered = {"groups": {}, "channels": {}}
         groups, channels = self.numbered["groups"], self.numbered["channels"]
+        fixed = {key: meta["number"] for key, meta in metas.items() if meta.get("number")}
         last = max((seen for _, seen in channels.values()), default=now)
         for key in [key for key, (_, seen) in channels.items() if last - seen > 7 * 86400]:
             del channels[key]
@@ -509,6 +627,8 @@ class Sync:
         for group in [group for group, number in groups.items() if str(number) not in held]:
             del groups[group]
         for key, meta in sorted(metas.items(), key=lambda pair: (str(pair[1].get("genre") or ""), str(pair[1].get("name") or ""))):
+            if key in fixed:
+                continue
             if key not in channels:
                 group = str(meta.get("genre") or "")
                 if group not in groups:
@@ -521,7 +641,7 @@ class Sync:
         with open(path + ".tmp", "w") as handle:
             json.dump(self.numbered, handle)
         os.replace(path + ".tmp", path)
-        return {key: channels[key][0] for key in metas}
+        return dict({key: channels[key][0] for key in metas if key not in fixed}, **fixed)
 
     def guide_index(self, metas):
         """The guides of the listed channels' sources, fetched every GUIDE_HOURS, programmes from
@@ -603,15 +723,16 @@ class Sync:
         item's channel as pushed."""
         now = self.now()
         numbers = self.numbers(metas, now) if self.config["live_tv"] else {}
-        guides = self.guide_index(list(metas.values())) if self.config["live_tv"] else None
+        guides = self.guide_index([meta for meta in metas.values() if not meta.get("slot")]) if self.config["live_tv"] else None
         sent = {}
         for entry in items:
             meta, channel = metas[entry["id"]], None
             if self.config["live_tv"] and live(entry["media_info"]):
-                name = str(meta.get("name") or entry["name"])
+                name = str(entry["name"])
+                games = meta.get("games") or []
                 channel = {"number": numbers[entry["id"]], "title": name,
                            "call_sign": re.sub(r"\s*\([^)]*\)", "", name).strip() or name,
-                           "guide": self.guide(guides, meta, now)}
+                           "guide": games if meta.get("slot") else around(self.guide(guides, meta, now), games)}
             sent[entry["id"]] = json.dumps(channel, sort_keys=True)
             if self.pushed.get(entry["id"]) != sent[entry["id"]]:
                 entry["channel"] = channel
@@ -670,16 +791,17 @@ class Sync:
         iptv-org has one, else its name. A picture is drawn once; its name carries what it was
         drawn from, so a new logo is a new path, which clients do not hold cached."""
         name = str(meta.get("name") or key)
+        shown = str(meta.get("title") or name)
         folder = os.path.join(self.config["cache"], "art")
         os.makedirs(folder, exist_ok=True)
         for url in [url for url in [logo_for(self.logo_index(), name)] if url] + [None]:
-            stem = "%s-%s" % (key, hashlib.sha1((url or "name:" + name).encode()).hexdigest()[:8])
+            stem = "%s-%s" % (key, hashlib.sha1((url or "name:" + shown).encode()).hexdigest()[:8])
             out = {shape: os.path.join(folder, "%s-%s.png" % (stem, shape)) for shape in SHAPES}
             try:
                 if not all(os.path.exists(path) for path in out.values()):
                     if url is None:
                         for shape, path in out.items():
-                            self.title(name, shape, path)
+                            self.title(shown, shape, path)
                     else:
                         self.logo(url, stem, folder, out)
                 return {shape: "%s/%s/art/%s" % (self.config["relay_url"], self.config["directory"], os.path.basename(path))
@@ -705,9 +827,81 @@ class Sync:
         finally:
             os.remove(source)
 
+    def schedule(self):
+        """ESPN's games from yesterday to two days ahead (its days are America's), by kickoff:
+        each league's day asked again every GUIDE_HOURS, and every sync while one of its games is
+        on, for its state. A day ESPN does not answer keeps what it answered last."""
+        now = self.now()
+        days = [time.strftime("%Y%m%d", time.gmtime(now + 86400 * at)) for at in (-1, 0, 1, 2)]
+        self.espn = {at: kept for at, kept in self.espn.items() if at[1] in days}
+        def stale(at):
+            fetched, games = self.espn.get(at, (0, []))
+            return now - fetched >= GUIDE_HOURS * 3600 or any(on(game, now) for game in games)
+        def fetch_day(at):
+            try:
+                return at, (now, espn_games(at[0], at[1], get_json("%s%s/scoreboard?dates=%s" % (ESPN, at[0], at[1]), 20)))
+            except Exception as error:
+                LOG.warning("ESPN %s %s: %s", at[0], at[1], error)
+                return at, self.espn.get(at, (0, []))
+        with ThreadPoolExecutor(8) as pool:
+            self.espn.update(pool.map(fetch_day, [at for at in ((league, day) for league in LEAGUES for day in days) if stale(at)]))
+        games = {game["id"]: game for _, kept in self.espn.values() for game in kept}
+        return sorted(games.values(), key=lambda game: game["programme"]["start"])
+
+    def slots(self, games, catalog, metas):
+        """The slots' items, adding their metas to `metas`. Each day's games of a sport are dealt
+        to its slots in kickoff order, in turn, and a slot plays the channel that shows its game
+        while it is on: of those whose name calls both sides, in any group, the one of the
+        tallest picture, then of the shortest name. With no game on, or no channel of it, its
+        relay answers 503, and it keeps the probe of the last game it carried; before its first
+        it is left out."""
+        path = os.path.join(self.config["cache"], "slots.json")
+        if self.slotted is None:
+            try:
+                with open(path) as handle:
+                    self.slotted = json.load(handle)
+            except (OSError, ValueError):
+                self.slotted = {}
+        now, lanes, days = self.now(), {}, {}
+        for game in games:
+            count = int(self.config["slots"].get(game["sport"]) or 0)
+            if count:
+                dealt = days.setdefault((game["sport"], game["day"]), [])
+                lanes.setdefault("%s %d" % (game["sport"], len(dealt) % count + 1), []).append(game)
+                dealt.append(game)
+        playing = {}  # slot title -> the channels of the game on in it
+        for title, lane in lanes.items():
+            game = next((game for game in lane if on(game, now)), None)
+            if game:
+                playing[title] = {meta["id"][len("lstv-"):]: meta for meta in listed_metas(catalog) if shows(meta, game)}
+        wanted = sorted({channel for found in playing.values() for channel in found})
+        with ThreadPoolExecutor(8) as pool:
+            probes = dict(zip(wanted, pool.map(self.probe, wanted)))
+        items, before = [], json.dumps(self.slotted, sort_keys=True)
+        for base, (sport, count) in enumerate(self.config["slots"].items(), SLOTS_FROM):
+            for at in range(1, int(count) + 1):
+                key, title = "slot-%s-%d" % (slug(sport), at), "%s %d" % (sport, at)
+                found = sorted(((height(probes[channel]), -len(str(meta.get("name"))), channel)
+                                for channel, meta in playing.get(title, {}).items() if probes[channel]), reverse=True)
+                self.routes[key] = found[0][2] if found else None
+                if found:
+                    self.slotted[key] = probes[found[0][2]]
+                if self.slotted.get(key):
+                    meta = {"name": title, "genre": sport, "number": "%d.%d" % (base, at), "slot": True,
+                            "games": one_at_a_time([game["programme"] for game in lanes.get(title, [])])}
+                    metas["ls-" + key] = meta
+                    items.append(item(self.config, key, meta, self.slotted[key], self.artwork(key, meta)))
+        if json.dumps(self.slotted, sort_keys=True) != before:
+            os.makedirs(self.config["cache"], exist_ok=True)
+            with open(path + ".tmp", "w") as handle:
+                json.dump(self.slotted, handle)
+            os.replace(path + ".tmp", path)
+        return items
+
     def once(self):
-        listed = channels(self.config, get_json(self.config["live_sports_url"] + "/catalog/tv/all.json"))
-        if not listed:
+        catalog = get_json(self.config["live_sports_url"] + "/catalog/tv/all.json")
+        listed = channels(self.config, catalog, self.config["lineup"])
+        if not listed_metas(catalog):
             # live-sports lists nothing until its first checks finish after a start.
             LOG.info("live-sports lists no channel that plays yet")
             return
@@ -727,10 +921,18 @@ class Sync:
             if probe and name not in named:
                 named.add(name)
                 items.append(item(self.config, key, meta, probe, pictures))
+        metas = {"ls-" + key: meta for key, _, meta in listed}
+        if self.config["lineup"] is not None:
+            games = self.schedule()
+            for _, _, meta in listed:
+                if meta.get("espn"):
+                    networks = {name.lower() for name in meta["espn"]}
+                    meta["games"] = one_at_a_time([game["programme"] for game in games if game["networks"] & networks])
+            items += self.slots(games, catalog, metas)
         if not items:
             return
 
-        sent = self.live_tv(items, {"ls-" + key: meta for key, _, meta in listed})
+        sent = self.live_tv(items, metas)
         try:
             answer = self.snapshot(items, force=False)
         except urllib.error.HTTPError as error:
@@ -803,6 +1005,9 @@ def handler(config, routes):
                                  urllib.parse.urlsplit(self.path).path)
             if not match or match[1] not in routes:
                 self.send_error(404)
+                return
+            if routes[match[1]] is None:  # a slot with no game on
+                self.send_error(503)
                 return
             self.send_response(302)
             self.send_header("Location", "%s/stream/%s" % (config["live_sports_url"], routes[match[1]]))
