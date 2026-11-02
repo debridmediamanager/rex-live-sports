@@ -670,6 +670,23 @@ class Lineup(unittest.TestCase):
         self.assertEqual(listed("skybundesliga/germany", "skybundesliga1/germany"), [("skysportbundesliga1-germany", "1", "Sky Sport Bundesliga 1")])
         self.assertEqual(listed("other/germany"), [])
 
+    def test_a_lineup_replaces_what_rex_held_before_it(self):
+        # fun, 2026-11-02: rex held 807 channels from before the lineup, the first sync with it
+        # listed 28, and that waited half an hour as live-sports still checking would.
+        rex_live_sports.Sync(config(self.work, self.base)).once()  # every channel, as before
+        held = len(self.pushed())
+        self.calls.clear()
+        self.sync.once()
+        self.assertLess(len(self.pushed()) * 2, held)
+        snapshots = [body for path, body in self.calls if path == "/rex/feed/live-sports/snapshot"]
+        self.assertEqual([part.get("force", False) for part in snapshots if part["complete"]], [False, True])  # refused, then forced
+        # A restart beside live-sports, two of the lineup's channels listed: left to rex's guard.
+        self.catalog["metas"][:] = [meta for meta in CATALOG_KEYED["metas"] if meta["key"] in ("espn/united states", "nfl/united states")]
+        self.calls.clear()
+        self.sync.once()
+        snapshots = [body for path, body in self.calls if path == "/rex/feed/live-sports/snapshot"]
+        self.assertEqual([part.get("force", False) for part in snapshots if part["complete"]], [False])
+
     def test_the_rest_of_live_sports_when_asked(self):
         sync = self.lineup(lineup_only=False)
         sync.once()

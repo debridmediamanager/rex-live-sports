@@ -959,10 +959,14 @@ class Sync:
             # rex holds is more likely live-sports still checking after a start (measured: 36
             # of 750 channels), so that one is left to rex's guard, for half an hour.
             held = json.loads(error.read() or b"{}").get("of") or 0
+            # With only a lineup, its channels and the slots are what is expected, not what rex
+            # holds from before it (807 channels on fun, 2026-11-02, where 28 were listed).
+            if self.config["lineup"] is not None and self.config["lineup_only"]:
+                held = len(self.config["lineup"]) + sum(1 for meta in metas.values() if meta.get("slot"))
             if len(items) * 2 < held:
                 self.short_since = self.short_since or time.time()
                 if time.time() - self.short_since < 1800:
-                    LOG.info("live-sports lists %d channels where rex holds %d: waiting", len(items), held)
+                    LOG.info("live-sports lists %d channels where %d are expected: waiting", len(items), held)
                     return
             answer = self.snapshot(items, force=True)
         self.short_since = None

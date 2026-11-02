@@ -185,6 +185,8 @@ lineup is found.
 - Channels with several qualities play the one FFmpeg picks first, which can be the lowest.
 - When live-sports lists fewer than half the channels rex holds (it does for a few minutes after
   it starts), rex keeps them all for up to half an hour, while live-sports checks them again.
+  With a lineup, that is fewer than half of its channels and slots, so the first sync with one
+  replaces what rex held before it at once.
 - Anyone who can reach `listen` can use the relay to reach your live-sports server. Keep it on
   `127.0.0.1` unless rex runs elsewhere.
 - Guides are matched by name, like logos, so a channel can get the guide of another feed of the
