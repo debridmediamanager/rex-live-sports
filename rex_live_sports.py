@@ -75,7 +75,7 @@ DEFAULTS = {
     "live_tv": True,
     "lineup": "lineup.json",
     "lineup_only": True,
-    "slots": {"NFL": 8, "NBA": 6, "NHL": 6, "MLB": 4, "Soccer": 8, "F1": 1},
+    "slots": {"NFL": 10, "NBA": 6, "NHL": 6, "MLB": 4, "Soccer": 8, "F1": 1},
 }
 
 CHANNEL = re.compile(r"[A-Za-z0-9_.-]+")
@@ -283,7 +283,7 @@ def epoch(text):
     return int(datetime.datetime.fromisoformat(text.replace("Z", "+00:00")).timestamp())
 
 
-def espn_games(league, day, answer):
+def espn_games(league, answer):
     """A league's day of ESPN's scoreboard as games: each competition (an F1 weekend's sessions
     are competitions of one event) as a guide programme, with its state, what a channel's name
     calls each side (a nickname, `Chiefs`; a club by its name or its last word, `Newcastle United`
@@ -311,7 +311,7 @@ def espn_games(league, day, answer):
             logo = str(teams[0]["team"].get("logo") or "") if teams else ""
             if logo.startswith("https://"):
                 programme["thumb"] = logo
-            out.append({"id": "%s/%s" % (event.get("id"), competition.get("id")), "day": day, "sport": sport,
+            out.append({"id": "%s/%s" % (event.get("id"), competition.get("id")), "sport": sport,
                         "programme": programme,
                         "state": ((competition.get("status") or event.get("status") or {}).get("type") or {}).get("state"),
                         "teams": [[part for part in called(side["team"]) if part] for side in teams] or [[sport]],
@@ -336,9 +336,24 @@ def height(probe):
     return max([stream.get("height") or 0 for stream in probe.get("streams") or [] if stream.get("codec_type") == "video"] or [0])
 
 
+def deal(games, slots):
+    """Each sport's games, by kickoff, to the lowest-numbered of its `slots` free by then (its last
+    game over by the sport's length), else to the one whose game ends soonest: {"NFL 1": [game]}."""
+    lanes, ends = {}, {}
+    for game in games:
+        count = int(slots.get(game["sport"]) or 0)
+        if count:
+            free = ends.setdefault(game["sport"], [0] * count)
+            at = next((at for at, end in enumerate(free) if end <= game["programme"]["start"]), free.index(min(free)))
+            free[at] = game["programme"]["end"]
+            lanes.setdefault("%s %d" % (game["sport"], at + 1), []).append(game)
+    return lanes
+
+
 def one_at_a_time(programmes):
-    """Programmes by their start, each cut at the next one's: a slot's games are dealt in turn,
-    and ESPN lists the regional games of one network (CBS's at 1 pm) at once."""
+    """Programmes by their start, each cut at the next one's: a slot takes a game before its last
+    one ends when all are taken, and ESPN lists the regional games of one network (CBS's at 1 pm)
+    at once."""
     programmes = sorted(programmes, key=lambda programme: programme["start"])
     cut = [dict(programme, end=min(programme["end"], after["start"])) for programme, after in zip(programmes, programmes[1:])]
     return [programme for programme in cut + programmes[-1:] if programme["end"] > programme["start"]]
@@ -839,7 +854,7 @@ class Sync:
             return now - fetched >= GUIDE_HOURS * 3600 or any(on(game, now) for game in games)
         def fetch_day(at):
             try:
-                return at, (now, espn_games(at[0], at[1], get_json("%s%s/scoreboard?dates=%s" % (ESPN, at[0], at[1]), 20)))
+                return at, (now, espn_games(at[0], get_json("%s%s/scoreboard?dates=%s" % (ESPN, at[0], at[1]), 20)))
             except Exception as error:
                 LOG.warning("ESPN %s %s: %s", at[0], at[1], error)
                 return at, self.espn.get(at, (0, []))
@@ -849,8 +864,8 @@ class Sync:
         return sorted(games.values(), key=lambda game: game["programme"]["start"])
 
     def slots(self, games, catalog, metas):
-        """The slots' items, adding their metas to `metas`. Each day's games of a sport are dealt
-        to its slots in kickoff order, in turn, and a slot plays the channel that shows its game
+        """The slots' items, adding their metas to `metas`. Each game goes to the first slot of its
+        sport free at its kickoff (`deal`), and a slot plays the channel that shows its game
         while it is on: of those whose name calls both sides, in any group, the one of the
         tallest picture, then of the shortest name. With no game on, or no channel of it, its
         relay answers 503, and it keeps the probe of the last game it carried; before its first
@@ -862,13 +877,7 @@ class Sync:
                     self.slotted = json.load(handle)
             except (OSError, ValueError):
                 self.slotted = {}
-        now, lanes, days = self.now(), {}, {}
-        for game in games:
-            count = int(self.config["slots"].get(game["sport"]) or 0)
-            if count:
-                dealt = days.setdefault((game["sport"], game["day"]), [])
-                lanes.setdefault("%s %d" % (game["sport"], len(dealt) % count + 1), []).append(game)
-                dealt.append(game)
+        now, lanes = self.now(), deal(games, self.config["slots"])
         playing = {}  # slot title -> the channels of the game on in it
         for title, lane in lanes.items():
             game = next((game for game in lane if on(game, now)), None)

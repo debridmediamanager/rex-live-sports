@@ -106,7 +106,7 @@ Edit `config.json` and restart:
 | `live_tv` | `true` | Each channel is also a channel of rex's Live TV. `false` takes them out of it; they stay in the library |
 | `lineup` | `lineup.json` | The [lineup](#lineups), beside `config.json` unless its path says where: `lineups/us.json`, `lineups/uk.json`, `lineups/de.json` or your own. With no such file, every channel is in Live TV, numbered by group |
 | `lineup_only` | `true` | With a lineup, only its channels and the slots. `false` keeps the rest of live-sports' channels too, numbered from 100 as without one |
-| `slots` | `{"NFL": 8, "NBA": 6, "NHL": 6, "MLB": 4, "Soccer": 8, "F1": 1}` | With a lineup, how many slots each sport has. A sport left out has none; `"College Football": 4` adds college football's |
+| `slots` | `{"NFL": 10, "NBA": 6, "NHL": 6, "MLB": 4, "Soccer": 8, "F1": 1}` | With a lineup, how many slots each sport has. A sport left out has none; `"College Football": 4` adds college football's |
 
 ## Live TV
 
@@ -154,9 +154,10 @@ lineup is found.
   Bundesliga, LaLiga, Serie A, Ligue 1, Champions League, Europa League, MLS and F1. Around the
   games the guide is as before. ESPN names only US broadcasters, so the UK and German channels
   get no games from it.
-- **Slots.** Each sport has slot channels: `NFL 1` to `NFL 8` (700.1 to 700.8), `NBA 1` to `NBA 6`
-  (701.1 on), then NHL, MLB, Soccer and F1, each sport a collection. Each day's games are dealt to
-  them in kickoff order, so the guide shows what is coming in each. From 15 minutes before
+- **Slots.** Each sport has slot channels: `NFL 1` to `NFL 10` (700.1 to 700.10), `NBA 1` to
+  `NBA 6` (701.1 on), then NHL, MLB, Soccer and F1, each sport a collection. Each game goes to
+  the first slot of its sport that is free at kickoff, the game before it over by the sport's
+  usual length, so the guide shows what is coming in each. From 15 minutes before
   kickoff until the game is over, a slot plays the live-sports channel that has it, whatever
   its group: one whose name has both teams (`Kansas City Chiefs vs Denver Broncos`, `Denver
   Broncos vs Kansas City Chiefs (LOW SERVER)`), the sharpest picture first, then the shortest name.
@@ -192,8 +193,8 @@ lineup is found.
   in `cache/guides` and downloaded again only when epgshare01 has rebuilt them.
 - A slot finds a game's channel by the teams in its name, so a stream named otherwise (`nfl
   ravens`) is not found, and a game no channel has is in the guide but does not play.
-- Games are dealt to slots in turn, not to the next free one, so a late game can go to a slot
-  whose early game is still on. The slot plays the early game to its end, then the late one.
+- When no slot of a sport is free at a game's kickoff, the game goes to the one whose game ends
+  soonest. That slot plays its earlier game to the end, then the later one.
 - Where ESPN names one network for several games at once (CBS's and FOX's regional NFL games),
   that channel's guide shows one of them.
 
