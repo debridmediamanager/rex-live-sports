@@ -631,13 +631,15 @@ class Lineup(unittest.TestCase):
     def test_a_lineup_is_its_channels_at_their_numbers(self):
         self.sync.once()
         pushed = self.pushed()
+        def keys(entry):
+            return entry["key"] if isinstance(entry["key"], list) else [entry["key"]]
         with open(US) as handle:
-            lineup = {"ls-" + rex_live_sports.slug(entry["key"]): entry for entry in json.load(handle)}
+            lineup = {"ls-" + rex_live_sports.slug(keys(entry)[0]): entry for entry in json.load(handle)}
         listed = {meta["key"] for meta in self.catalog["metas"]}
         # The 26 of its 30 channels live-sports lists now, and nothing else of live-sports': the
         # games are in their slots.
         channels = {key: item for key, item in pushed.items() if not key.startswith("ls-slot-")}
-        self.assertEqual(set(channels), {key for key, entry in lineup.items() if entry["key"] in listed})
+        self.assertEqual(set(channels), {key for key, entry in lineup.items() if set(keys(entry)) & listed})
         self.assertEqual(len(channels), 26)
         self.assertEqual({key: item["channel"]["number"] for key, item in channels.items()},
                          {key: lineup[key]["number"] for key in channels})
@@ -653,6 +655,20 @@ class Lineup(unittest.TestCase):
         self.sync.once()
         self.assertEqual(self.pushed()["ls-espn-united-states"]["name"], "ESPN")
         self.assertEqual(self.sync.routes["espn-united-states"], "cv-3585682-copy")
+
+    def test_a_channel_by_the_first_of_its_keys_listed(self):
+        # zen, 2026-11-01: live-sports keeps `Sky Sport Bundesliga 1 (Germany)`, `SKY BUNDESLIGA 1
+        # .b` and `SKY BUNDESLIGA .c` apart, under three keys.
+        entry = {"number": "2", "name": "Sky Sport Bundesliga 1",
+                 "key": ["skysportbundesliga1/germany", "skybundesliga1/germany", "skybundesliga/germany"]}
+        meta = next(meta for meta in CATALOG_KEYED["metas"] if meta["key"] == "skysportbundesliga1/germany")
+        def listed(*keys):
+            catalog = {"metas": [dict(meta, id="lstv-%d" % at, key=key) for at, key in enumerate(keys)]}
+            return [(key, channel, found["title"]) for key, channel, found in rex_live_sports.channels(rex_live_sports.DEFAULTS, catalog, [entry])]
+        # Whichever is listed, the same channel under its first key; of several, the lineup's first.
+        self.assertEqual(listed("skybundesliga/germany"), [("skysportbundesliga1-germany", "0", "Sky Sport Bundesliga 1")])
+        self.assertEqual(listed("skybundesliga/germany", "skybundesliga1/germany"), [("skysportbundesliga1-germany", "1", "Sky Sport Bundesliga 1")])
+        self.assertEqual(listed("other/germany"), [])
 
     def test_the_rest_of_live_sports_when_asked(self):
         sync = self.lineup(lineup_only=False)

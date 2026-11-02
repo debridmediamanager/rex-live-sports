@@ -166,7 +166,9 @@ lineup is found.
   the first time it plays a game.
 - **Your own lineup** is a JSON list like the ones in `lineups/`: `{"number": "2", "name":
   "ESPN", "key": "espn/united states", "espn": ["ESPN"]}`. `key` is live-sports' key of the
-  channel (in its catalog: the name in lower-case letters and digits, `/`, its country).
+  channel (in its catalog: the name in lower-case letters and digits, `/`, its country), or a
+  list of them for a channel live-sports lists under several (`["bigten/united states",
+  "btn/united states"]`): the first one it lists is taken.
   `espn` is optional: the names ESPN gives the network (`Fox`, `NFL Net`, `CBSSN`).
 
 ## Limits

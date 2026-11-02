@@ -177,13 +177,20 @@ def channels(config, catalog, lineup=None):
     knows a channel by its name (`key`), and the relay plays whichever copy is listed now.
 
     A lineup's channel, found by live-sports' own key for a channel's copies (`espn/united
-    states`), is taken whatever its group, under that key, with the lineup's name and number;
-    with `lineup_only`, nothing else is."""
+    states`), or the first of its keys the catalog lists (live-sports keeps `SKY BUNDESLIGA 1`
+    and `Sky Sport Bundesliga 1` apart), is taken whatever its group, under its first key, with
+    the lineup's name and number; with `lineup_only`, nothing else is."""
     out, keys = [], set()
-    named = {str(entry["key"]): entry for entry in lineup or []}
+    metas = listed_metas(catalog)
+    listed, named = {str(meta.get("key")) for meta in metas}, {}
+    for entry in lineup or []:
+        ways = [str(key) for key in (entry["key"] if isinstance(entry["key"], list) else [entry["key"]])]
+        found = next((key for key in ways if key in listed), None)
+        if found:
+            named[found] = dict(entry, key=ways[0])
     others = lineup is None or not config["lineup_only"]
     # The lineup's channels first, so that no other channel takes their key.
-    for meta in sorted(listed_metas(catalog), key=lambda meta: str(meta.get("key")) not in named):
+    for meta in sorted(metas, key=lambda meta: str(meta.get("key")) not in named):
         channel, group = meta["id"][len("lstv-"):], str(meta.get("genre") or "")
         entry = named.get(str(meta.get("key")))
         if entry or others and group.startswith(tuple(config["groups"])):
